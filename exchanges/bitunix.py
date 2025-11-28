@@ -7,7 +7,8 @@ import logging
 from typing import Optional, Dict, Any
 import requests
 from tenacity import retry, stop_after_attempt, wait_exponential
-from .base import BaseExchange, Position
+# Absolute import – works whether you run run.py or the file directly
+from exchanges.base import BaseExchange, Position
 API_URL = "https://fapi.bitunix.com/api/v1/futures"
 TIMEOUT = 10
 
@@ -30,7 +31,7 @@ class BitunixAuth:
             "nonce": nonce,
             "timestamp": timestamp,
             "sign": self._generate_signature(nonce, timestamp, query_params, body),
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
         }
 
 
@@ -53,10 +54,8 @@ class BitunixFutures(BaseExchange):
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     def _get(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Any:
         url = f"{API_URL}{endpoint}"
-        sorted_params = ""
-        if params:
-            sorted_items = sorted(params.items(), key=lambda x: x[0])
-            sorted_params = "".join(f"{k}{v}" for k, v in sorted_items)
+        sorted_params = "".join(f"{k}{v}" for k, v in sorted(
+            (params or {}).items())) if params else ""
         headers = self.auth.get_headers(query_params=sorted_params)
         response = requests.get(url, headers=headers,
                                 params=params, timeout=TIMEOUT)
@@ -69,7 +68,7 @@ class BitunixFutures(BaseExchange):
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     def _post(self, endpoint: str, data: Dict[str, Any]) -> Any:
         url = f"{API_URL}{endpoint}"
-        payload = json.dumps(data, separators=(',', ':'))
+        payload = json.dumps(data, separators=(",", ":"))
         headers = self.auth.get_headers(body=payload)
         response = requests.post(url, headers=headers,
                                  data=payload, timeout=TIMEOUT)
@@ -88,12 +87,11 @@ class BitunixFutures(BaseExchange):
         raise ValueError(f"Price not found for {symbol}")
 
     def get_account_balance(self, currency: str) -> float:
-        raw = self._get("/account", {"marginCoin": currency})
-        logging.info(f"[DEBUG] Raw /account response: {raw}")   # ← ADD THIS
-        # ← ADD THIS
-        logging.info(
-            f"[DEBUG] Available margin field names: {list(raw.keys())}")
-        return float(raw["margin"])
+        data = self._get("/account", {"marginCoin": currency})
+        # Bitunix futures returns "available" for usable balance
+        balance = float(data.get("available") or 0.0)
+        logging.info(f"[LIVE] Futures USDT balance: ${balance:,.2f}")
+        return balance
 
     def get_pending_positions(self, symbol: str) -> Optional[Position]:
         data = self._get("/position/get_pending_positions", {"symbol": symbol})
@@ -106,24 +104,18 @@ class BitunixFutures(BaseExchange):
             side=side,
             size=abs(float(pos["qty"])),
             entry_price=float(pos["avgOpenPrice"]),
-            symbol=symbol
+            symbol=symbol,
         )
 
     def set_leverage(self, symbol: str, leverage: int):
-        self._post("/account/change_leverage", {
-            "symbol": symbol,
-            "leverage": leverage,
-            "marginCoin": "USDT"
-        })
+        self._post("/account/change_leverage",
+                   {"symbol": symbol, "leverage": leverage, "marginCoin": "USDT"})
         logging.info(f"[LIVE] Leverage set to {leverage}x")
 
     def set_margin_mode(self, symbol: str, mode: str):
         mode_str = "ISOLATION" if mode.upper() == "ISOLATED" else "CROSS"
-        self._post("/account/change_margin_mode", {
-            "symbol": symbol,
-            "marginMode": mode_str,
-            "marginCoin": "USDT"
-        })
+        self._post("/account/change_margin_mode",
+                   {"symbol": symbol, "marginMode": mode_str, "marginCoin": "USDT"})
         logging.info(f"[LIVE] Margin mode: {mode_str}")
 
     def open_position(self, symbol: str, side: str, size: str, sl_pct: Optional[int]):
@@ -133,20 +125,16 @@ class BitunixFutures(BaseExchange):
             usdt_value = balance * (float(size[:-1]) / 100)
         else:
             usdt_value = float(size)
-        # Calculate raw BTC quantity
         qty = usdt_value / price
-        # ENFORCE MINIMUM SIZE: Bitunix requires >= 0.0001 BTC
         MIN_QTY = 0.0001
         if qty < MIN_QTY:
-            if balance * 0.1 < MIN_QTY * price:  # If even 10% of balance is too small
+            if balance < MIN_QTY * price * 2:  # even 200% of min size not possible
                 logging.warning(
-                    f"[LIVE] Balance too low (${balance:,.2f}) to open minimum position. Skipping trade.")
+                    f"[LIVE] Balance too low (${balance:,.2f}) for minimum trade. Skipping.")
                 return
-            else:
-                logging.info(
-                    f"[LIVE] Position size too small ({qty:.6f} BTC), forcing minimum {MIN_QTY} BTC")
-                qty = MIN_QTY
-        # Round to 4 decimals (Bitunix allows up to 0.0001 precision)
+            logging.info(
+                f"[LIVE] Size too small ({qty:.6f} BTC) → forcing minimum {MIN_QTY} BTC")
+            qty = MIN_QTY
         qty = round(qty, 4)
         order_data = {
             "symbol": symbol,
@@ -154,47 +142,47 @@ class BitunixFutures(BaseExchange):
             "side": side.upper(),
             "tradeSide": "OPEN",
             "orderType": "MARKET",
-            "marginCoin": "USDT"
+            "marginCoin": "USDT",
         }
         if sl_pct:
             sl_price = price * \
-                (1 - sl_pct/100) if side.lower() == "buy" else price * (1 + sl_pct/100)
-            order_data.update({
-                "slPrice": str(round(sl_price, 2)),
-                "slStopType": "MARK_PRICE",
-                "slOrderType": "MARKET"
-            })
+                (1 - sl_pct / 100) if side.lower() == "buy" else price * \
+                (1 + sl_pct / 100)
+            order_data.update(
+                {
+                    "slPrice": str(round(sl_price, 2)),
+                    "slStopType": "MARK_PRICE",
+                    "slOrderType": "MARKET",
+                }
+            )
         self._post("/trade/place_order", order_data)
         sl_text = f" | SL {sl_pct}%" if sl_pct else ""
         logging.info(
-            f"[LIVE] Opened {side.upper()} {qty} BTC (${usdt_value:,.1f}) @ ${price:,.2f}{sl_text}")
+            f"[LIVE] Opened {side.upper()} {qty} BTC (~${usdt_value:,.1f}) @ ${price:,.2f}{sl_text}")
 
     def flash_close_position(self, symbol: str):
         position = self.get_pending_positions(symbol)
         if not position:
             logging.info("[LIVE] No open position to close")
             return
-        self._post("/trade/flash_close_position", {
-            "positionId": position.positionId
-        })
+        self._post("/trade/flash_close_position",
+                   {"positionId": position.positionId})
         logging.info(
             f"[LIVE] Flash closed {position.side} position ({position.size} BTC)")
 
     def fetch_ohlcv(self, symbol: str, timeframe: str = "1m", limit: int = 15):
-        data = self._public_get("/market/kline", {
-            "symbol": symbol,
-            "interval": timeframe,
-            "limit": limit
-        })
+        data = self._public_get(
+            "/market/kline", {"symbol": symbol, "interval": timeframe, "limit": limit})
         ohlcv = []
         for k in data:
-            ohlcv.append([
-                k["time"],           # timestamp
-                float(k["open"]),    # open
-                float(k["high"]),    # high
-                float(k["low"]),     # low
-                float(k["close"]),   # close
-                # volume (USDT amount; use "baseVol" if you prefer BTC volume)
-                float(k["quoteVol"])
-            ])
+            ohlcv.append(
+                [
+                    k["time"],
+                    float(k["open"]),
+                    float(k["high"]),
+                    float(k["low"]),
+                    float(k["close"]),
+                    float(k["quoteVol"]),
+                ]
+            )
         return ohlcv
