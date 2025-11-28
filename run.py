@@ -10,7 +10,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 load_dotenv()
 # Toggle paper/live here → SET TO False WHEN READY FOR LIVE
-config = TradingConfig(FORWARD_TESTING=True)
+FORWARD_TESTING = os.getenv(
+    "FORWARD_TESTING", "false").lower() in ("true", "1", "yes")
+config = TradingConfig(FORWARD_TESTING=FORWARD_TESTING)
 if config.FORWARD_TESTING:
     exchange = ForwardTester(config)
 else:
