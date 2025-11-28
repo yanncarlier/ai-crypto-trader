@@ -40,6 +40,17 @@ class BitunixFutures(BaseExchange):
         logging.info("[LIVE] Bitunix Futures client initialized")
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    def _public_get(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Any:
+        url = f"{API_URL}{endpoint}"
+        response = requests.get(url, params=params, timeout=TIMEOUT)
+        response.raise_for_status()
+        result = response.json()
+        if result.get("code") != 0:
+            raise Exception(
+                f"API Error {result.get('code')}: {result.get('msg')}")
+        return result["data"]
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     def _get(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Any:
         url = f"{API_URL}{endpoint}"
         sorted_params = ""
@@ -70,7 +81,7 @@ class BitunixFutures(BaseExchange):
         return result["data"]
 
     def get_current_price(self, symbol: str) -> float:
-        data = self._get("/market/tickers", {"symbols": symbol})
+        data = self._public_get("/market/tickers", {"symbols": symbol})
         for t in data:
             if t["symbol"] == symbol:
                 return float(t["lastPrice"])
@@ -78,7 +89,7 @@ class BitunixFutures(BaseExchange):
 
     def get_account_balance(self, currency: str) -> float:
         data = self._get("/account", {"marginCoin": currency})
-        return float(data["available"]) + float(data["margin"])
+        return float(data["margin"])
 
     def get_pending_positions(self, symbol: str) -> Optional[Position]:
         data = self._get("/position/get_pending_positions", {"symbol": symbol})
@@ -152,7 +163,7 @@ class BitunixFutures(BaseExchange):
             f"[LIVE] Flash closed {position.side} position ({position.size} BTC)")
 
     def fetch_ohlcv(self, symbol: str, timeframe: str = "1m", limit: int = 15):
-        data = self._get("/market/kline", {
+        data = self._public_get("/market/kline", {
             "symbol": symbol,
             "interval": timeframe,
             "limit": limit
@@ -160,11 +171,12 @@ class BitunixFutures(BaseExchange):
         ohlcv = []
         for k in data:
             ohlcv.append([
-                k[0],            # timestamp
-                float(k[1]),     # open
-                float(k[2]),     # high
-                float(k[3]),     # low
-                float(k[4]),     # close
-                float(k[5])      # volume
+                k["time"],           # timestamp
+                float(k["open"]),    # open
+                float(k["high"]),    # high
+                float(k["low"]),     # low
+                float(k["close"]),   # close
+                # volume (USDT amount; use "baseVol" if you prefer BTC volume)
+                float(k["quoteVol"])
             ])
         return ohlcv
