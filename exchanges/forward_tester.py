@@ -48,19 +48,31 @@ class ForwardTester(BaseExchange):
             logging.info(f"[Paper] Closed position at market")
             self.position = None
     # Add this method inside ForwardTester class
+    # def exchange(self):
+    #     # Dummy object to satisfy fetch_ohlcv call in paper mode
+    #     class Dummy:
+    #         def fetch_ohlcv(self, symbol, timeframe, limit):
+    #             # Simulate 15 minutes of fake price data
+    #             import time
+    #             import random
+    #             base_price = self.price
+    #             data = []
+    #             for i in range(limit):
+    #                 price = base_price * (1 + random.gauss(0, 0.001))
+    #                 data.append([time.time() - (limit-i)*60,
+    #                             price, price, price, price, 1000000])
+    #             return data
+    #     return Dummy()
+    # DELETE the old exchange() method and add this instead:
 
-    def exchange(self):
-        # Dummy object to satisfy fetch_ohlcv call in paper mode
-        class Dummy:
-            def fetch_ohlcv(self, symbol, timeframe, limit):
-                # Simulate 15 minutes of fake price data
-                import time
-                import random
-                base_price = self.price
-                data = []
-                for i in range(limit):
-                    price = base_price * (1 + random.gauss(0, 0.001))
-                    data.append([time.time() - (limit-i)*60,
-                                price, price, price, price, 1000000])
-                return data
-        return Dummy()
+    def fetch_ohlcv(self, symbol: str, timeframe: str = '1m', limit: int = 15):
+        """Simulate OHLCV for paper trading"""
+        import time
+        base_price = self.price
+        data = []
+        for i in range(limit):
+            price = base_price * (1 + random.gauss(0, 0.001))
+            timestamp = int(time.time() - (limit - i) * 60)
+            data.append([timestamp, price, price, price,
+                        price, 100000000])  # high volume
+        return data

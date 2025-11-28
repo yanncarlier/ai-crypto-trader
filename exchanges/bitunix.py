@@ -61,7 +61,7 @@ class BitunixFutures(BaseExchange):
             usdt_value = balance * pct
         else:
             usdt_value = float(size)
-        contracts = (usdt_value / price) / contract_size
+        contracts = usdt_value / (price * contract_size)
         contracts = round(contracts, 3)  # Adjust precision as needed
         params = {}
         if sl_pct:

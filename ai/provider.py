@@ -48,12 +48,15 @@ def send_request(prompt: str, crypto_symbol: str = "Bitcoin", api_key: str | Non
         "tools": [{
             "type": "function",
             "function": {
-                "name": "submit_outlook",
-                "description": "Submit market outlook",
+                "name": "submit_analysis",
+                "description": "Submit trading outlook",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "interpretation": {"type": "string", "enum": ["Bullish", "Bearish", "Neutral"]},
+                        "interpretation": {
+                            "type": "string",
+                            "enum": ["Bullish", "Bearish", "Neutral"]
+                        },
                         "reasons": {"type": "string"}
                     },
                     "required": ["interpretation", "reasons"],
@@ -62,7 +65,7 @@ def send_request(prompt: str, crypto_symbol: str = "Bitcoin", api_key: str | Non
                 "strict": True
             }
         }],
-        "tool_choice": "auto"
+        "tool_choice": {"type": "function", "function": {"name": "submit_analysis"}}
     }
     try:
         logging.debug(f"Calling {PROVIDER.upper()} → {MODEL}")

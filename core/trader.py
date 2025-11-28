@@ -1,4 +1,5 @@
 # core/trader.py
+import random
 import logging
 from config.settings import TradingConfig
 from exchanges.base import BaseExchange
@@ -24,8 +25,9 @@ class TradingBot:
             volume = random.uniform(50_000_000, 500_000_000)
             return price, change_pct, volume
         # Live: real data
-        ohlcv = self.exchange.exchange.fetch_ohlcv(
-            symbol, timeframe='1m', limit=15)
+        # ohlcv = self.exchange.exchange.fetch_ohlcv(
+        #     symbol, timeframe='1m', limit=15)
+        ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe='1m', limit=15)
         current_price = ohlcv[-1][4]
         prev_price = ohlcv[-11][4] if len(ohlcv) >= 11 else current_price
         change_pct = (current_price - prev_price) / prev_price * 100
