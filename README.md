@@ -14,8 +14,10 @@ Modular AI-powered BTC/USDT futures bot with paper & live mode.
 
 ### Setup
 ```bash
-pip install -r requirements.txt
-cp .env.example .env
+uv run main.py
+source .venv/bin/activate
+uv pip install -r requirements.txt
+cp example.env .env
 # 1. Add your keys
 python run.py
 ```

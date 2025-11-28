@@ -13,7 +13,7 @@ class TradingConfig:
     POSITION_SIZE: str = "10%"     # "10%", "50%", or "500" (fixed USDT)
     STOP_LOSS_PERCENT: Optional[int] = 10
     TAKE_PROFIT_PERCENT: Optional[int] = None  # Future use
-    FORWARD_TESTING: bool = True
+    FORWARD_TESTING: bool = False
     INITIAL_CAPITAL: float = 10_000.0
     TAKER_FEE: float = 0.0006
 
