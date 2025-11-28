@@ -3,11 +3,12 @@ from typing import Any, Optional
 
 
 class Position:
-    def __init__(self, positionId: str, side: str, size: float, entry_price: float):
+    def __init__(self, positionId: str, side: str, size: float, entry_price: float, symbol: str):
         self.positionId = positionId
         self.side = side  # "BUY" or "SELL"
         self.size = size
         self.entry_price = entry_price
+        self.symbol = symbol
 
 
 class BaseExchange(ABC):
@@ -27,4 +28,4 @@ class BaseExchange(ABC):
                       size: str, sl_pct: Optional[int]): ...
 
     @abstractmethod
-    def flash_close_position(self, position_id: str): ...
+    def flash_close_position(self, symbol: str): ...

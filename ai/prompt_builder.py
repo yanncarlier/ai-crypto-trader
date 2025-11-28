@@ -1,10 +1,11 @@
-def build_prompt(price: float, change_pct: float, volume: str, cycle: int, symbol: str) -> str:
+def build_prompt(price: float, change_pct: float, volume: float, cycle: int, symbol: str) -> str:
     return f"""
 You are a professional Bitcoin trading analyst with access to real-time data.
 CURRENT {symbol} PRICE: ${price:,.2f} USDT
-{cycle}-minute change: {change_pct:+.2f}%
-Volume (USDT): {volume}
-Analyze the very short-term momentum and sentiment.
+{cycle}-minute price change: {change_pct:+.2f}%
+24h Volume: ${volume:,.0f} USDT
+Analyze the very short-term momentum and market sentiment.
+Is the price showing strength, weakness, or consolidation?
 Respond with valid JSON only (no markdown, no extra text):
 {{
   "interpretation": "Bullish" | "Bearish" | "Neutral",

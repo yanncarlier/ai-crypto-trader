@@ -2,7 +2,13 @@
 import ccxt
 import logging
 from typing import Optional
+from tenacity import retry, stop_after_attempt, wait_exponential
 from .base import BaseExchange, Position
+
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+def safe_ccxt_call(func, *args, **kwargs):
+    return func(*args, **kwargs)
 
 
 class BitunixFutures(BaseExchange):
@@ -16,51 +22,66 @@ class BitunixFutures(BaseExchange):
         self.exchange.load_markets()
 
     def get_current_price(self, symbol: str) -> float:
-        ticker = self.exchange.fetch_ticker(symbol)
-        return ticker['last']
+        ticker = safe_ccxt_call(self.exchange.fetch_ticker, symbol)
+        return float(ticker['last'])
 
     def get_account_balance(self, currency: str) -> float:
-        balance = self.exchange.fetch_balance(params={'type': 'swap'})
-        return balance['total'].get(currency, 0)
+        balance = safe_ccxt_call(
+            self.exchange.fetch_balance, params={'type': 'swap'})
+        return float(balance['total'].get(currency, 0.0))
 
-    def get_pending_positions(self, symbol: str):
-        positions = self.exchange.fetch_positions([symbol])
+    def get_pending_positions(self, symbol: str) -> Optional[Position]:
+        positions = safe_ccxt_call(self.exchange.fetch_positions, [symbol])
         for pos in positions:
             if pos['contracts'] > 0:
-                return Position(pos['info']['positionId'], pos['side'], pos['contracts'], pos['entryPrice'])
+                return Position(
+                    positionId=pos['info']['positionId'],
+                    side=pos['side'].upper(),
+                    size=float(pos['contracts']),
+                    entry_price=float(pos['entryPrice']),
+                    symbol=symbol
+                )
         return None
 
     def set_leverage(self, symbol: str, leverage: int):
-        self.exchange.set_leverage(leverage, symbol)
+        safe_ccxt_call(self.exchange.set_leverage, leverage, symbol)
+        logging.info(f"[LIVE] Leverage set to {leverage}x")
 
     def set_margin_mode(self, symbol: str, mode: str):
-        self.exchange.set_margin_mode(mode.lower(), symbol)
+        safe_ccxt_call(self.exchange.set_margin_mode, mode.lower(), symbol)
+        logging.info(f"[LIVE] Margin mode: {mode}")
 
     def open_position(self, symbol: str, side: str, size: str, sl_pct: Optional[int]):
-        # size can be percentage or fixed
         balance = self.get_account_balance('USDT')
-        if size.endswith('%'):
-            pct = int(size[:-1]) / 100
-            usdt_amount = balance * pct
-        else:
-            usdt_amount = float(size)
         price = self.get_current_price(symbol)
-        amount = usdt_amount / price * \
-            self.exchange.market(symbol)['contractSize']
-        params = {'positionIdx': 0}
+        market = self.exchange.market(symbol)
+        contract_size = market['contractSize']
+        if size.endswith('%'):
+            pct = float(size[:-1]) / 100
+            usdt_value = balance * pct
+        else:
+            usdt_value = float(size)
+        contracts = (usdt_value / price) / contract_size
+        contracts = round(contracts, 3)  # Adjust precision as needed
+        params = {}
         if sl_pct:
             sl_price = price * \
                 (1 - sl_pct/100) if side == 'sell' else price * (1 + sl_pct/100)
             params['stopLoss'] = str(round(sl_price, 2))
-        order = self.exchange.create_order(
-            symbol, 'market', side, amount, None, params)
-        logging.info(f"LIVE: Opened {side.upper()} {amount:.4f} contracts")
+        order = safe_ccxt_call(
+            self.exchange.create_order,
+            symbol, 'market', side, contracts, None, params
+        )
+        logging.info(
+            f"[LIVE] Opened {side.upper()} {contracts} contracts @ ${price:,.2f}")
 
-    def flash_close_position(self, position_id: str):
-        # Bitunix doesn't expose positionId directly in close, so close by symbol
-        position = self.get_pending_positions(self.exchange.symbols[0])
-        if position:
-            side = 'sell' if position.side == 'BUY' else 'buy'
-            self.exchange.create_order(
-                position.symbol, 'market', side, position.size)
-            logging.info("LIVE: Position closed at market")
+    def flash_close_position(self, symbol: str):
+        position = self.get_pending_positions(symbol)
+        if not position:
+            return
+        side = 'sell' if position.side == 'BUY' else 'buy'
+        safe_ccxt_call(
+            self.exchange.create_order,
+            symbol, 'market', side, position.size
+        )
+        logging.info(f"[LIVE] Closed {position.side} position at market")
