@@ -1,0 +1,30 @@
+from abc import ABC, abstractmethod
+from typing import Any, Optional
+
+
+class Position:
+    def __init__(self, positionId: str, side: str, size: float, entry_price: float):
+        self.positionId = positionId
+        self.side = side  # "BUY" or "SELL"
+        self.size = size
+        self.entry_price = entry_price
+
+
+class BaseExchange(ABC):
+    @abstractmethod
+    def get_current_price(self, symbol: str) -> float: ...
+    @abstractmethod
+    def get_account_balance(self, currency: str) -> float: ...
+    @abstractmethod
+    def get_pending_positions(self, symbol: str) -> Optional[Position]: ...
+    @abstractmethod
+    def set_leverage(self, symbol: str, leverage: int): ...
+    @abstractmethod
+    def set_margin_mode(self, symbol: str, mode: str): ...
+
+    @abstractmethod
+    def open_position(self, symbol: str, side: str,
+                      size: str, sl_pct: Optional[int]): ...
+
+    @abstractmethod
+    def flash_close_position(self, position_id: str): ...
