@@ -114,6 +114,7 @@ $RECYCLE.BIN/
 # Logs & Databases
 *.log
 logs/
+logs/*
 *.sql
 *.sqlite
 *.sqlite3
@@ -166,3 +167,4 @@ coverage.xml
 .mypy_cache/
 # End of filelogs/
 ai_responses/
+ai_responses/*
