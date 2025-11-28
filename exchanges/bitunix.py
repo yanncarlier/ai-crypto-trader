@@ -129,11 +129,25 @@ class BitunixFutures(BaseExchange):
             usdt_value = balance * (float(size[:-1]) / 100)
         else:
             usdt_value = float(size)
-        qty = round(usdt_value / price, 3)  # BTC quantity
+        # Calculate raw BTC quantity
+        qty = usdt_value / price
+        # ENFORCE MINIMUM SIZE: Bitunix requires >= 0.0001 BTC
+        MIN_QTY = 0.0001
+        if qty < MIN_QTY:
+            if balance * 0.1 < MIN_QTY * price:  # If even 10% of balance is too small
+                logging.warning(
+                    f"[LIVE] Balance too low (${balance:,.2f}) to open minimum position. Skipping trade.")
+                return
+            else:
+                logging.info(
+                    f"[LIVE] Position size too small ({qty:.6f} BTC), forcing minimum {MIN_QTY} BTC")
+                qty = MIN_QTY
+        # Round to 4 decimals (Bitunix allows up to 0.0001 precision)
+        qty = round(qty, 4)
         order_data = {
             "symbol": symbol,
             "qty": str(qty),
-            "side": side.upper(),       # "BUY" or "SELL"
+            "side": side.upper(),
             "tradeSide": "OPEN",
             "orderType": "MARKET",
             "marginCoin": "USDT"
@@ -149,7 +163,7 @@ class BitunixFutures(BaseExchange):
         self._post("/trade/place_order", order_data)
         sl_text = f" | SL {sl_pct}%" if sl_pct else ""
         logging.info(
-            f"[LIVE] Opened {side.upper()} {qty} BTC @ ${price:,.2f}{sl_text}")
+            f"[LIVE] Opened {side.upper()} {qty} BTC (${usdt_value:,.1f}) @ ${price:,.2f}{sl_text}")
 
     def flash_close_position(self, symbol: str):
         position = self.get_pending_positions(symbol)
