@@ -88,8 +88,12 @@ class BitunixFutures(BaseExchange):
         raise ValueError(f"Price not found for {symbol}")
 
     def get_account_balance(self, currency: str) -> float:
-        data = self._get("/account", {"marginCoin": currency})
-        return float(data["margin"])
+        raw = self._get("/account", {"marginCoin": currency})
+        logging.info(f"[DEBUG] Raw /account response: {raw}")   # ← ADD THIS
+        # ← ADD THIS
+        logging.info(
+            f"[DEBUG] Available margin field names: {list(raw.keys())}")
+        return float(raw["margin"])
 
     def get_pending_positions(self, symbol: str) -> Optional[Position]:
         data = self._get("/position/get_pending_positions", {"symbol": symbol})
