@@ -148,4 +148,35 @@ class BitunixFutures(BaseExchange):
             })
         self._post("/trade/place_order", order_data)
         sl_text = f" | SL {sl_pct}%" if sl_pct else ""
-        logging.info
+        logging.info(
+            f"[LIVE] Opened {side.upper()} {qty} BTC @ ${price:,.2f}{sl_text}")
+
+    def flash_close_position(self, symbol: str):
+        position = self.get_pending_positions(symbol)
+        if not position:
+            logging.info("[LIVE] No open position to close")
+            return
+        self._post("/trade/flash_close_position", {
+            "positionId": position.positionId
+        })
+        logging.info(
+            f"[LIVE] Flash closed {position.side} position ({position.size} BTC)")
+
+    def fetch_ohlcv(self, symbol: str, timeframe: str = "1m", limit: int = 15):
+        data = self._public_get("/market/kline", {
+            "symbol": symbol,
+            "interval": timeframe,
+            "limit": limit
+        })
+        ohlcv = []
+        for k in data:
+            ohlcv.append([
+                k["time"],           # timestamp
+                float(k["open"]),    # open
+                float(k["high"]),    # high
+                float(k["low"]),     # low
+                float(k["close"]),   # close
+                # volume (USDT amount; use "baseVol" if you prefer BTC volume)
+                float(k["quoteVol"])
+            ])
+        return ohlcv
