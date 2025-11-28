@@ -164,4 +164,5 @@ coverage.xml
 /site
 # mypy
 .mypy_cache/
-# End of file
+# End of filelogs/
+ai_responses/
