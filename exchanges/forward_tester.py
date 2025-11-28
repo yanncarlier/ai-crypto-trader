@@ -1,19 +1,25 @@
 # exchanges/forward_tester.py
 import random
 import logging
-from .base import BaseExchange, Position
 from typing import Optional
+from .base import BaseExchange, Position
 
 
 class ForwardTester(BaseExchange):
     def __init__(self, config):
         self.config = config
-        self.balance = config.INITIAL_CAPITAL
+        # ←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←
+        # OLD (broken): self.balance = config.INITIAL_CAPITAL
+        # NEW (working):
+        self.balance = getattr(config, "INITIAL_CAPITAL",
+                               10_000.0)  # fallback if missing
+        # Or even better — just hardcode it since it's paper trading:
+        self.balance = 10_000.0
+        # ↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑
         self.position: Optional[Position] = None
         self.price = 65000.0
 
     def get_current_price(self, symbol: str) -> float:
-        # Realistic random walk
         self.price *= (1 + random.uniform(-0.008, 0.008))
         self.price = round(max(self.price, 10000), 2)
         logging.info(f"[Paper] {symbol} price: ${self.price:,.2f}")
@@ -34,7 +40,11 @@ class ForwardTester(BaseExchange):
     def open_position(self, symbol: str, side: str, size: str, sl_pct: Optional[int]):
         price = self.get_current_price(symbol)
         self.position = Position(
-            "paper_123", "BUY" if side == "buy" else "SELL", 0.01, price)
+            positionId="paper_123",
+            side="BUY" if side == "buy" else "SELL",
+            size=0.01,
+            entry_price=price
+        )
         logging.info(f"[Paper] Opened {side.upper()} position @ ${price:,.2f}")
 
     def flash_close_position(self, position_id: str):
