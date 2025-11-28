@@ -19,7 +19,7 @@ source .venv/bin/activate
 uv pip install -r requirements.txt
 cp example.env .env
 # 1. Add your keys
-python run.py
+.venv/bin/python ./run.py
 ```
 
 
@@ -31,5 +31,5 @@ python run.py
 
 # 3. Optional: run every 10 minutes automatically
 #    (add this to crontab -e)
-*/10 * * * * cd ai-crypto-trader && ./batch_runner.sh >> logs/cron.log 2>&1
+*/10 * * * * cd ai-crypto-trader/ && bash batch_runner.sh >> logs/cron.log 2>&1
 ```
