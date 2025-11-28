@@ -85,3 +85,7 @@ class BitunixFutures(BaseExchange):
             symbol, 'market', side, position.size
         )
         logging.info(f"[LIVE] Closed {position.side} position at market")
+
+    def fetch_ohlcv(self, symbol: str, timeframe: str = '1m', limit: int = 15):
+        """Fetch OHLCV data using the underlying CCXT exchange."""
+        return safe_ccxt_call(self.exchange.fetch_ohlcv, symbol, timeframe, limit=limit)
