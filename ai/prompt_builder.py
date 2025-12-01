@@ -1,3 +1,4 @@
+# ai/prompt_builder.py
 def build_prompt(price: float, change_pct: float, volume: float, cycle: int, symbol: str) -> str:
     return f"""
 You are a professional Bitcoin trading analyst with access to real-time data.

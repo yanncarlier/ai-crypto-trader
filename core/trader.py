@@ -16,55 +16,23 @@ class TradingBot:
     def __init__(self, config: TradingConfig, exchange: BaseExchange):
         self.config = config
         self.exchange = exchange
-        self.health_monitor = HealthMonitor()
-        self.current_balance = None
+        self.current_balance = config.INITIAL_CAPITAL
         configure_logger(config.RUN_NAME)
-        # Display configuration
         mode = "PAPER" if config.FORWARD_TESTING else "LIVE"
-        logging.info(f"🔧 {mode} TRADING CONFIGURATION:")
-        logging.info(f"   📊 Symbol: {config.SYMBOL}")
-        logging.info(f"   ⏱️  Cycle: {config.CYCLE_MINUTES} minutes")
-        logging.info(f"   ⚡ Leverage: {config.LEVERAGE}x")
-        logging.info(f"   🛡️  Margin: {config.MARGIN_MODE}")
-        logging.info(f"   📈 Position: {config.POSITION_SIZE}")
-        logging.info(f"   🚨 Stop Loss: {config.STOP_LOSS_PERCENT}%")
-        if config.FORWARD_TESTING:
-            logging.info(f"   💰 Paper Balance: ${config.INITIAL_CAPITAL:,.2f}")
-        else:
-            # Fetch and display current balance for live trading
-            self._update_live_balance()
-
-    def _update_live_balance(self):
-        """Fetch and update the current balance from the exchange"""
-        try:
-            self.current_balance = self.exchange.get_account_balance(
-                self.config.CURRENCY)
-            logging.info(
-                f"💰 CURRENT LIVE BALANCE: ${self.current_balance:,.2f} {self.config.CURRENCY}")
-        except Exception as e:
-            logging.error(f"❌ Failed to fetch live balance: {e}")
-            # Fallback to configured capital
-            self.current_balance = self.config.INITIAL_CAPITAL
-            logging.warning(
-                f"⚠️ Using fallback balance: ${self.current_balance:,.2f}")
+        logging.info(
+            f"{mode} | {config.SYMBOL} | {config.CYCLE_MINUTES}min | {config.LEVERAGE}x")
 
     def _get_effective_balance(self) -> float:
         """Get the current balance (live or paper)"""
         if self.config.FORWARD_TESTING:
             return self.config.INITIAL_CAPITAL
-        else:
-            # For live trading, always fetch fresh balance
-            try:
-                fresh_balance = self.exchange.get_account_balance(
-                    self.config.CURRENCY)
-                if fresh_balance != self.current_balance:
-                    logging.info(
-                        f"🔄 Balance update: ${self.current_balance:,.2f} → ${fresh_balance:,.2f}")
-                    self.current_balance = fresh_balance
-                return fresh_balance
-            except Exception as e:
-                logging.error(f"❌ Failed to refresh balance: {e}")
-                return self.current_balance or self.config.INITIAL_CAPITAL
+        try:
+            fresh_balance = self.exchange.get_account_balance(
+                self.config.CURRENCY)
+            self.current_balance = fresh_balance
+            return fresh_balance
+        except Exception:
+            return self.current_balance
 
     @retry(stop=stop_after_attempt(2), wait=wait_fixed(3))
     def _get_market_data(self, symbol: str):
@@ -80,22 +48,10 @@ class TradingBot:
         volume = ohlcv[-1][5]
         return current_price, change_pct, volume
 
-    def _get_market_data_with_fallback(self, symbol: str):
-        """Get market data with multiple fallback strategies"""
-        try:
-            return self._get_market_data(symbol)
-        except Exception as e:
-            logging.warning(
-                f"⚠️ Primary market data failed, using fallback: {e}")
-            # Fallback: use current price with neutral data
-            price = self.exchange.get_current_price(symbol)
-            return price, 0.0, 100_000_000  # Neutral change, average volume
-
     def _get_ai_analysis_with_timeout(self, price: float, change_pct: float, volume: float, symbol: str):
         """Get AI analysis with timeout protection"""
         def timeout_handler(signum, frame):
             raise TimeoutError("AI analysis timeout")
-        # Set timeout to 30 seconds
         original_handler = signal.signal(signal.SIGALRM, timeout_handler)
         signal.alarm(30)
         try:
@@ -104,172 +60,75 @@ class TradingBot:
             outlook = send_request(prompt, crypto_symbol="Bitcoin")
             return outlook
         except TimeoutError:
-            logging.error("⏰ AI analysis timed out after 30 seconds")
-            return AIOutlook(interpretation="Neutral", reasons="Fallback: AI timeout")
+            logging.warning("AI timeout - using neutral")
+            return AIOutlook(interpretation="Neutral", reasons="AI timeout")
         except Exception as e:
-            logging.error(f"❌ AI analysis failed: {e}")
-            return AIOutlook(interpretation="Neutral", reasons=f"Fallback: {str(e)}")
+            logging.warning(f"AI error: {e}")
+            return AIOutlook(interpretation="Neutral", reasons=f"AI error: {e}")
         finally:
-            signal.alarm(0)  # Cancel timeout
+            signal.alarm(0)
             signal.signal(signal.SIGALRM, original_handler)
 
-    def _calculate_position_size(self, balance: float) -> float:
-        """Calculate position size based on config and current balance"""
+    def _calculate_position_value(self, balance: float) -> float:
+        """Calculate position value based on config"""
         if self.config.POSITION_SIZE.endswith('%'):
             percentage = float(self.config.POSITION_SIZE[:-1]) / 100
-            position_value = balance * percentage
-            logging.info(
-                f"📐 Position calculation: {balance:,.2f} × {percentage:.1%} = ${position_value:,.2f}")
-            return position_value
+            return balance * percentage
         else:
-            fixed_size = float(self.config.POSITION_SIZE)
-            logging.info(f"📐 Fixed position size: ${fixed_size:,.2f}")
-            return fixed_size
+            return float(self.config.POSITION_SIZE)
 
     def _execute_trading_decision(self, action: str, symbol: str, position):
-        """Execute trading decision with detailed error handling"""
+        """Execute trading decision"""
         try:
-            # Get current balance for position sizing
             current_balance = self._get_effective_balance()
-            # Configure exchange settings
-            logging.info("⚙️ Configuring exchange settings...")
+            # Set exchange parameters
             self.exchange.set_margin_mode(symbol, self.config.MARGIN_MODE)
             self.exchange.set_leverage(symbol, self.config.LEVERAGE)
-            # Execute trading action
             if action in ("OPEN_LONG", "REVERSE_TO_LONG"):
                 if "REVERSE" in action and position:
-                    logging.info(
-                        "🔄 Reversing position: Closing current position")
                     self.exchange.flash_close_position(symbol)
-                position_value = self._calculate_position_size(current_balance)
-                logging.info(
-                    f"📈 Opening LONG position (${position_value:,.2f})")
+                position_value = self._calculate_position_value(
+                    current_balance)
+                logging.info(f"Opening LONG ${position_value:,.0f}")
                 self.exchange.open_position(
                     symbol, "buy", self.config.POSITION_SIZE, self.config.STOP_LOSS_PERCENT
                 )
             elif action in ("OPEN_SHORT", "REVERSE_TO_SHORT"):
                 if "REVERSE" in action and position:
-                    logging.info(
-                        "🔄 Reversing position: Closing current position")
                     self.exchange.flash_close_position(symbol)
-                position_value = self._calculate_position_size(current_balance)
-                logging.info(
-                    f"📉 Opening SHORT position (${position_value:,.2f})")
+                position_value = self._calculate_position_value(
+                    current_balance)
+                logging.info(f"Opening SHORT ${position_value:,.0f}")
                 self.exchange.open_position(
                     symbol, "sell", self.config.POSITION_SIZE, self.config.STOP_LOSS_PERCENT
                 )
             elif action == "CLOSE" and position:
-                logging.info("🔒 Closing position")
+                logging.info("Closing position")
                 self.exchange.flash_close_position(symbol)
             else:
-                logging.info(
-                    "💤 No action required - maintaining current position")
-            self.health_monitor.record_cycle(True)
-            logging.info("✅ Trade execution completed successfully")
+                logging.info("No action")
         except Exception as e:
-            self.health_monitor.record_cycle(False, str(e))
-            # Enhanced error logging
-            if hasattr(e, "last_attempt") and e.last_attempt is not None:
-                root_cause = e.last_attempt.exception()
-                logging.error(
-                    f"💥 Trade execution FAILED → Root cause: {root_cause}")
-            elif hasattr(e, "__cause__") and e.__cause__:
-                logging.error(
-                    f"💥 Trade execution FAILED → Cause: {e.__cause__}")
-            else:
-                logging.error(f"💥 Trade execution FAILED → {e}")
-            # Log full traceback for debugging
-            logging.debug("Full traceback:", exc_info=True)
+            logging.error(f"Trade failed: {e}")
 
     def run_cycle(self):
-        logging.info("🔄 " + "=" * 50)
-        logging.info("🔄 NEW TRADING CYCLE STARTED")
-        logging.info("🔄 " + "=" * 50)
         symbol = self.config.SYMBOL
-        # Display current balance at the start of each cycle
-        current_balance = self._get_effective_balance()
-        logging.info(
-            f"💰 CURRENT BALANCE: ${current_balance:,.2f} {self.config.CURRENCY}")
         # Get market data
         try:
-            price, change_pct, volume = self._get_market_data_with_fallback(
-                symbol)
-            logging.info(
-                f"📊 Market Data: ${price:,.2f} | Δ{change_pct:+.2f}% | Vol: ${volume:,.0f}")
+            price, change_pct, volume = self._get_market_data(symbol)
         except Exception as e:
-            logging.error(f"💥 Critical: Failed to fetch market data: {e}")
-            self.health_monitor.record_cycle(False, f"Market data: {e}")
+            logging.error(f"Market data error: {e}")
             return
         # Get AI analysis
-        logging.info("🤖 Requesting AI analysis...")
         outlook = self._get_ai_analysis_with_timeout(
             price, change_pct, volume, symbol)
         interpretation = outlook.interpretation
-        # Save AI response to logs directory
         save_response(outlook, self.config.RUN_NAME)
-        # Display AI decision with emojis
-        emoji = "📈" if interpretation == "Bullish" else "📉" if interpretation == "Bearish" else "➡️"
-        logging.info(f"🎯 AI DECISION: {emoji} {interpretation:>8}")
-        logging.info(f"💭 REASONING: {outlook.reasons}")
-        # Get current position and make decision
+        # Get current position
         position = self.exchange.get_pending_positions(symbol)
         current_side = position.side if position else "FLAT"
         action = get_action(interpretation, current_side)
-        # Display trading decision
-        action_emojis = {
-            "OPEN_LONG": "🟢📈",
-            "OPEN_SHORT": "🔴📉",
-            "REVERSE_TO_LONG": "🔄📈",
-            "REVERSE_TO_SHORT": "🔄📉",
-            "CLOSE": "🔒",
-            "HOLD": "⏸️",
-            "STAY_FLAT": "💤"
-        }
-        action_emoji = action_emojis.get(action, "❓")
-        logging.info(f"⚡ TRADING ACTION: {action_emoji} {action:>15}")
-        logging.info(f"📦 CURRENT POSITION: {current_side}")
-        # Calculate and display intended position size
-        if action in ("OPEN_LONG", "REVERSE_TO_LONG", "OPEN_SHORT", "REVERSE_TO_SHORT"):
-            position_value = self._calculate_position_size(current_balance)
-            logging.info(f"💎 INTENDED POSITION SIZE: ${position_value:,.2f}")
-        # Execute trading decision
+        # Log decision
+        logging.info(
+            f"${price:,.0f} | Δ{change_pct:+.1f}% | AI: {interpretation} | Pos: {current_side} → {action}")
+        # Execute trade
         self._execute_trading_decision(action, symbol, position)
-        # Log cycle completion
-        logging.info("✅ " + "=" * 50)
-        logging.info("✅ TRADING CYCLE COMPLETED")
-        logging.info("✅ " + "=" * 50)
-        logging.info("")  # Empty line for readability
-
-
-class HealthMonitor:
-    def __init__(self):
-        self.start_time = time.time()
-        self.cycle_count = 0
-        self.errors = []
-
-    def record_cycle(self, success: bool, error: str = None):
-        self.cycle_count += 1
-        if not success and error:
-            self.errors.append({
-                'time': time.time(),
-                'error': error,
-                'cycle': self.cycle_count
-            })
-            logging.error(f"❌ Cycle {self.cycle_count} failed: {error}")
-        else:
-            logging.info(f"✅ Cycle {self.cycle_count} completed successfully")
-
-    def get_status(self):
-        uptime = time.time() - self.start_time
-        error_rate = len(self.errors) / \
-            self.cycle_count if self.cycle_count > 0 else 0
-        status = {
-            'uptime_hours': round(uptime / 3600, 2),
-            'total_cycles': self.cycle_count,
-            'error_count': len(self.errors),
-            'error_rate': round(error_rate * 100, 2),
-            'last_errors': self.errors[-5:] if self.errors else []
-        }
-        logging.info(f"📈 Health Status: {status['total_cycles']} cycles, "
-                     f"{status['error_count']} errors ({status['error_rate']}% error rate)")
-        return status
