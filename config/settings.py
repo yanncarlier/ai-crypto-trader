@@ -24,7 +24,7 @@ class TradingConfig:
     LLM_MODEL: str = "default"  # Will use provider defaults if set to "default"
     LLM_TEMPERATURE: float = 0.2
     LLM_MAX_TOKENS: int = 800
-    EXCHANGE: str = "BINANCE"  # "BINANCE" or "BITUNIX"
+    EXCHANGE: str = "BITUNIX"  # "BINANCE" or "BITUNIX"
     TEST_NET: bool = True  # For Binance testnet
 
     @property
