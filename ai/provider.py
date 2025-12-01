@@ -7,7 +7,8 @@ from datetime import datetime
 from typing import Literal
 import requests
 from pydantic import BaseModel, Field
-PROVIDER = os.getenv("LLM_PROVIDER", "xai").lower()
+from config.settings import TradingConfig
+# Provider configuration
 PROVIDER_CONFIG = {
     "xai": {"url": "https://api.x.ai/v1/chat/completions", "default_model": "grok-2-1212"},
     "groq": {"url": "https://api.groq.com/openai/v1/chat/completions", "default_model": "llama-3.3-70b-versatile"},
@@ -16,12 +17,6 @@ PROVIDER_CONFIG = {
     "deepseek": {"url": "https://api.deepseek.com/beta/chat/completions", "default_model": "deepseek-chat"},
     "mistral": {"url": "https://api.mistral.ai/v1/chat/completions", "default_model": "mistral-large-latest"},
 }
-if PROVIDER not in PROVIDER_CONFIG:
-    raise ValueError(f"Unknown LLM_PROVIDER={PROVIDER}")
-URL = PROVIDER_CONFIG[PROVIDER]["url"]
-MODEL = os.getenv("LLM_MODEL", PROVIDER_CONFIG[PROVIDER]["default_model"])
-TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.2"))
-MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "800"))
 
 
 class AIOutlook(BaseModel):
@@ -29,22 +24,34 @@ class AIOutlook(BaseModel):
     reasons: str = Field(min_length=1)
 
 
-def send_request(prompt: str, crypto_symbol: str = "Bitcoin", api_key: str | None = None) -> AIOutlook:
+def send_request(prompt: str, config: TradingConfig, api_key: str | None = None) -> AIOutlook:
+    """Send request to AI provider using config for settings"""
     api_key = api_key or os.getenv("LLM_API_KEY")
     if not api_key:
         return AIOutlook(interpretation="Neutral", reasons="No API key")
+    provider = config.LLM_PROVIDER.lower()
+    if provider not in PROVIDER_CONFIG:
+        raise ValueError(f"Unknown LLM_PROVIDER={provider}")
+    url = PROVIDER_CONFIG[provider]["url"]
+    # Use model from config, or provider default if "default"
+    if config.LLM_MODEL == "default":
+        model = PROVIDER_CONFIG[provider]["default_model"]
+    else:
+        model = config.LLM_MODEL
+    temperature = config.LLM_TEMPERATURE
+    max_tokens = config.LLM_MAX_TOKENS
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}"
     }
     payload = {
-        "model": MODEL,
-        "temperature": TEMPERATURE,
-        "max_tokens": MAX_TOKENS,
+        "model": model,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
         "messages": [{"role": "user", "content": prompt}],
     }
     try:
-        r = requests.post(URL, headers=headers, json=payload, timeout=45)
+        r = requests.post(url, headers=headers, json=payload, timeout=45)
         r.raise_for_status()
         data = r.json()
         content = data["choices"][0]["message"]["content"].strip()

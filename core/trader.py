@@ -21,6 +21,7 @@ class TradingBot:
         mode = "PAPER" if config.FORWARD_TESTING else "LIVE"
         logging.info(
             f"{mode} | {config.SYMBOL} | {config.CYCLE_MINUTES}min | {config.LEVERAGE}x")
+        logging.info(f"AI: {config.LLM_PROVIDER} ({config.LLM_MODEL})")
 
     def _get_effective_balance(self) -> float:
         """Get the current balance (live or paper)"""
@@ -57,7 +58,7 @@ class TradingBot:
         try:
             prompt = build_prompt(price, change_pct, volume,
                                   self.config.CYCLE_MINUTES, symbol)
-            outlook = send_request(prompt, crypto_symbol="Bitcoin")
+            outlook = send_request(prompt, self.config)
             return outlook
         except TimeoutError:
             logging.warning("AI timeout - using neutral")

@@ -10,22 +10,24 @@ sys.path.insert(0, str(Path(__file__).parent))
 load_dotenv()
 
 
-def validate_config() -> TradingConfig:
-    """Validate and create trading configuration"""
+def create_config() -> TradingConfig:
+    """Create trading configuration from .env and defaults"""
     try:
-        config = TradingConfig(
-            FORWARD_TESTING=os.getenv(
-                "FORWARD_TESTING", "false").lower() in ("true", "1", "yes"),
-            EXCHANGE=os.getenv("EXCHANGE", "BINANCE"),
-            TEST_NET=os.getenv("TEST_NET", "true").lower() in (
-                "true", "1", "yes")
-        )
+        # Get FORWARD_TESTING from .env (still in .env as requested)
+        forward_testing = os.getenv(
+            "FORWARD_TESTING", "false").lower() in ("true", "1", "yes")
+        # Create config with all defaults from settings.py, overriding FORWARD_TESTING from .env
+        config = TradingConfig(FORWARD_TESTING=forward_testing)
+        # Validate settings
         if config.LEVERAGE < 1 or config.LEVERAGE > 125:
             raise ValueError("Leverage must be between 1 and 125")
         if config.MARGIN_MODE.upper() not in ['ISOLATED', 'CROSS']:
             raise ValueError("Margin mode must be ISOLATED or CROSS")
         if config.EXCHANGE.upper() not in ['BINANCE', 'BITUNIX']:
             raise ValueError("Exchange must be BINANCE or BITUNIX")
+        if config.LLM_PROVIDER.lower() not in ['xai', 'groq', 'openai', 'openrouter', 'deepseek', 'mistral']:
+            raise ValueError(
+                f"Unsupported LLM provider: {config.LLM_PROVIDER}")
         return config
     except Exception as e:
         print(f"Configuration error: {e}")
@@ -34,7 +36,11 @@ def validate_config() -> TradingConfig:
 
 if __name__ == "__main__":
     try:
-        config = validate_config()
+        config = create_config()
+        # Show configuration
+        mode = "PAPER" if config.FORWARD_TESTING else "LIVE"
+        print(
+            f"Config: {config.EXCHANGE} | {mode} | {config.LLM_PROVIDER} ({config.LLM_MODEL})")
         api_key = os.getenv("EXCHANGE_API_KEY")
         api_secret = os.getenv("EXCHANGE_API_SECRET")
         if not config.FORWARD_TESTING and (not api_key or not api_secret):

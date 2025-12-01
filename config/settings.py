@@ -5,6 +5,7 @@ from typing import Optional
 
 @dataclass
 class TradingConfig:
+    # Trading Configuration
     CRYPTO: str = "Bitcoin"
     SYMBOL: str = "BTCUSDT"
     CURRENCY: str = "USDT"
@@ -13,11 +14,17 @@ class TradingConfig:
     MARGIN_MODE: str = "ISOLATED"  # "ISOLATED" or "CROSS"
     POSITION_SIZE: str = "10%"     # "10%", "50%", or "500" (fixed USDT)
     STOP_LOSS_PERCENT: Optional[int] = 10
-    TAKE_PROFIT_PERCENT: Optional[int] = None  # Future use
-    FORWARD_TESTING: bool = False
+    TAKE_PROFIT_PERCENT: Optional[int] = None
     INITIAL_CAPITAL: float = 10_000.0
     TAKER_FEE: float = 0.0006
-    EXCHANGE: str = "BITUNIX"  # "BINANCE" or "BITUNIX"
+    # Moved from .env to here
+    FORWARD_TESTING: bool = False  # true for paper trading
+    # "xai", "groq", "openai", "openrouter", "deepseek", "mistral"
+    LLM_PROVIDER: str = "xai"
+    LLM_MODEL: str = "default"  # Will use provider defaults if set to "default"
+    LLM_TEMPERATURE: float = 0.2
+    LLM_MAX_TOKENS: int = 800
+    EXCHANGE: str = "BINANCE"  # "BINANCE" or "BITUNIX"
     TEST_NET: bool = True  # For Binance testnet
 
     @property
