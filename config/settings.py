@@ -1,3 +1,4 @@
+# settings.py
 from dataclasses import dataclass
 from typing import Optional
 
@@ -16,8 +17,10 @@ class TradingConfig:
     FORWARD_TESTING: bool = False
     INITIAL_CAPITAL: float = 10_000.0
     TAKER_FEE: float = 0.0006
+    EXCHANGE: str = "BITUNIX"  # "BINANCE" or "BITUNIX"
+    TEST_NET: bool = True  # For Binance testnet
 
     @property
     def RUN_NAME(self) -> str:
         mode = "paper" if self.FORWARD_TESTING else "LIVE"
-        return f"{mode}_{self.CRYPTO}_{self.SYMBOL}_{self.LEVERAGE}x"
+        return f"{mode}_{self.EXCHANGE}_{self.CRYPTO}_{self.SYMBOL}_{self.LEVERAGE}x"

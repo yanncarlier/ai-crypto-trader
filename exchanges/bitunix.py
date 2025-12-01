@@ -6,8 +6,7 @@ import secrets
 import logging
 from typing import Optional, Dict, Any
 import requests
-from tenacity import retry, stop_after_attempt, wait_exponential
-# Absolute import – works whether you run run.py or the file directly
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from exchanges.base import BaseExchange, Position
 API_URL = "https://fapi.bitunix.com/api/v1/futures"
 TIMEOUT = 10
@@ -38,10 +37,25 @@ class BitunixAuth:
 class BitunixFutures(BaseExchange):
     def __init__(self, api_key: str, api_secret: str):
         self.auth = BitunixAuth(api_key, api_secret)
+        self.last_request_time = 0
+        self.min_request_interval = 0.1  # 100ms between requests
         logging.info("[LIVE] Bitunix Futures client initialized")
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    def _rate_limit(self):
+        """Implement rate limiting"""
+        elapsed = time.time() - self.last_request_time
+        if elapsed < self.min_request_interval:
+            time.sleep(self.min_request_interval - elapsed)
+        self.last_request_time = time.time()
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type(
+            (ConnectionError, TimeoutError, requests.exceptions.RequestException))
+    )
     def _public_get(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Any:
+        self._rate_limit()
         url = f"{API_URL}{endpoint}"
         response = requests.get(url, params=params, timeout=TIMEOUT)
         response.raise_for_status()
@@ -51,8 +65,14 @@ class BitunixFutures(BaseExchange):
                 f"API Error {result.get('code')}: {result.get('msg')}")
         return result["data"]
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type(
+            (ConnectionError, TimeoutError, requests.exceptions.RequestException))
+    )
     def _get(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Any:
+        self._rate_limit()
         url = f"{API_URL}{endpoint}"
         sorted_params = "".join(f"{k}{v}" for k, v in sorted(
             (params or {}).items())) if params else ""
@@ -65,8 +85,14 @@ class BitunixFutures(BaseExchange):
             raise Exception(f"API Error {data.get('code')}: {data.get('msg')}")
         return data["data"]
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type(
+            (ConnectionError, TimeoutError, requests.exceptions.RequestException))
+    )
     def _post(self, endpoint: str, data: Dict[str, Any]) -> Any:
+        self._rate_limit()
         url = f"{API_URL}{endpoint}"
         payload = json.dumps(data, separators=(",", ":"))
         headers = self.auth.get_headers(body=payload)
@@ -88,24 +114,28 @@ class BitunixFutures(BaseExchange):
 
     def get_account_balance(self, currency: str) -> float:
         data = self._get("/account", {"marginCoin": currency})
-        # Bitunix futures returns "available" for usable balance
         balance = float(data.get("available") or 0.0)
-        logging.info(f"[LIVE] Futures USDT balance: ${balance:,.2f}")
+        logging.info(f"[LIVE] Futures {currency} balance: ${balance:,.2f}")
         return balance
 
     def get_pending_positions(self, symbol: str) -> Optional[Position]:
-        data = self._get("/position/get_pending_positions", {"symbol": symbol})
-        if not data:
+        try:
+            data = self._get("/position/get_pending_positions",
+                             {"symbol": symbol})
+            if not data:
+                return None
+            pos = data[0]
+            side = "BUY" if float(pos["qty"]) > 0 else "SELL"
+            return Position(
+                positionId=pos["positionId"],
+                side=side,
+                size=abs(float(pos["qty"])),
+                entry_price=float(pos["avgOpenPrice"]),
+                symbol=symbol,
+            )
+        except Exception as e:
+            logging.warning(f"Failed to fetch positions: {e}")
             return None
-        pos = data[0]
-        side = "BUY" if float(pos["qty"]) > 0 else "SELL"
-        return Position(
-            positionId=pos["positionId"],
-            side=side,
-            size=abs(float(pos["qty"])),
-            entry_price=float(pos["avgOpenPrice"]),
-            symbol=symbol,
-        )
 
     def set_leverage(self, symbol: str, leverage: int):
         self._post("/account/change_leverage",
@@ -118,24 +148,32 @@ class BitunixFutures(BaseExchange):
                    {"symbol": symbol, "marginMode": mode_str, "marginCoin": "USDT"})
         logging.info(f"[LIVE] Margin mode: {mode_str}")
 
+    def get_position_size(self, symbol: str, balance: float, size_config: str) -> float:
+        """Calculate position size based on configuration"""
+        if size_config.endswith('%'):
+            percentage = float(size_config[:-1]) / 100
+            return balance * percentage
+        else:
+            return float(size_config)
+
+    def validate_position_size(self, symbol: str, size: float, min_size: float = 0.001) -> float:
+        """Validate and adjust position size to exchange requirements"""
+        if size < min_size:
+            raise ValueError(f"Position size {size} below minimum {min_size}")
+        return round(size, 4)
+
     def open_position(self, symbol: str, side: str, size: str, sl_pct: Optional[int]):
         balance = self.get_account_balance("USDT")
         price = self.get_current_price(symbol)
-        if size.endswith("%"):
-            usdt_value = balance * (float(size[:-1]) / 100)
-        else:
-            usdt_value = float(size)
+        # Use the new position size calculation
+        usdt_value = self.get_position_size(symbol, balance, size)
         qty = usdt_value / price
-        MIN_QTY = 0.0001
-        if qty < MIN_QTY:
-            if balance < MIN_QTY * price * 2:  # even 200% of min size not possible
-                logging.warning(
-                    f"[LIVE] Balance too low (${balance:,.2f}) for minimum trade. Skipping.")
-                return
-            logging.info(
-                f"[LIVE] Size too small ({qty:.6f} BTC) → forcing minimum {MIN_QTY} BTC")
-            qty = MIN_QTY
-        qty = round(qty, 4)
+        # Validate position size
+        try:
+            qty = self.validate_position_size(symbol, qty)
+        except ValueError as e:
+            logging.warning(f"[LIVE] Position size validation failed: {e}")
+            return
         order_data = {
             "symbol": symbol,
             "qty": str(qty),

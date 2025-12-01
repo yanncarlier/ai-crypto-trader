@@ -35,6 +35,7 @@ class AIOutlook(BaseModel):
 def send_request(prompt: str, crypto_symbol: str = "Bitcoin", api_key: str | None = None) -> AIOutlook:
     api_key = api_key or os.getenv("LLM_API_KEY")
     if not api_key:
+        logging.error("❌ No LLM API key found - returning Neutral")
         return AIOutlook(interpretation="Neutral", reasons="No API key")
     headers = {
         "Content-Type": "application/json",
@@ -68,7 +69,7 @@ def send_request(prompt: str, crypto_symbol: str = "Bitcoin", api_key: str | Non
         "tool_choice": {"type": "function", "function": {"name": "submit_analysis"}}
     }
     try:
-        logging.debug(f"Calling {PROVIDER.upper()} → {MODEL}")
+        logging.info(f"🤖 Calling {PROVIDER.upper()} → {MODEL}")
         r = requests.post(URL, headers=headers, json=payload, timeout=45)
         r.raise_for_status()
         data = r.json()
@@ -76,7 +77,10 @@ def send_request(prompt: str, crypto_symbol: str = "Bitcoin", api_key: str | Non
         # Tool call (works perfectly with xAI/Grok)
         if msg.get("tool_calls"):
             args = json.loads(msg["tool_calls"][0]["function"]["arguments"])
-            return AIOutlook(**args)
+            outlook = AIOutlook(**args)
+            logging.info(
+                f"✅ AI Response: {outlook.interpretation} - {outlook.reasons}")
+            return outlook
         # Direct JSON response
         content = msg.get("content", "").strip()
         if content.startswith("```"):
@@ -84,28 +88,47 @@ def send_request(prompt: str, crypto_symbol: str = "Bitcoin", api_key: str | Non
             if content.startswith("json"):
                 content = content[4:]
         try:
-            return AIOutlook(**json.loads(content))
+            outlook = AIOutlook(**json.loads(content))
+            logging.info(
+                f"✅ AI Response: {outlook.interpretation} - {outlook.reasons}")
+            return outlook
         except:
             pass
         # Fallback keyword
         text = content.lower()
         interp = "Bullish" if "bullish" in text and "bearish" not in text else "Bearish" if "bearish" in text else "Neutral"
-        return AIOutlook(interpretation=interp, reasons=text[:500])
+        outlook = AIOutlook(interpretation=interp, reasons=text[:500])
+        logging.info(
+            f"✅ AI Response: {outlook.interpretation} - {outlook.reasons}")
+        return outlook
     except Exception as e:
-        logging.error(f"AI call failed: {e}")
+        logging.error(f"❌ AI call failed: {e}")
         return AIOutlook(interpretation="Neutral", reasons=f"Error: {e}")
 # ===================== SAVE RESPONSE =====================
 
 
 def save_response(outlook: AIOutlook, run_name: str) -> None:
     try:
-        path = Path("ai_responses")
-        path.mkdir(exist_ok=True)
-        file = path / f"{run_name}.json"
+        # Save to logs/ai_responses/ instead of separate ai_responses/ directory
+        path = Path("logs/ai_responses")
+        path.mkdir(parents=True, exist_ok=True)
+        # Use the same date format as logs
+        date_str = datetime.now().strftime('%Y%m%d')
+        file = path / f"{run_name}_{date_str}.json"
+        # Load existing data or create new
         data = {}
         if file.exists():
-            data = json.load(open(file))
-        data[datetime.utcnow().isoformat()] = outlook.model_dump()
-        json.dump(data, open(file, "w"), indent=2)
+            try:
+                with open(file, 'r') as f:
+                    data = json.load(f)
+            except json.JSONDecodeError:
+                data = {}
+        # Add new response with timestamp
+        timestamp = datetime.utcnow().isoformat()
+        data[timestamp] = outlook.model_dump()
+        # Save back to file
+        with open(file, 'w') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        logging.info(f"💾 AI response saved to: {file}")
     except Exception as e:
-        logging.error(f"Could not save AI response: {e}")
+        logging.error(f"❌ Could not save AI response: {e}")
