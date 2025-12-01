@@ -113,10 +113,22 @@ class BitunixFutures(BaseExchange):
         raise ValueError(f"Price not found for {symbol}")
 
     def get_account_balance(self, currency: str) -> float:
-        data = self._get("/account", {"marginCoin": currency})
-        balance = float(data.get("available") or 0.0)
-        logging.info(f"[LIVE] Futures {currency} balance: ${balance:,.2f}")
-        return balance
+        try:
+            data = self._get("/account", {"marginCoin": currency})
+            balance = float(data.get("available") or 0.0)
+            # More detailed balance information
+            total_balance = float(data.get("total") or 0.0)
+            frozen_balance = float(data.get("frozen") or 0.0)
+            logging.info(f"💰 Bitunix Balance Details:")
+            logging.info(f"   💵 Available: ${balance:,.2f} {currency}")
+            logging.info(f"   🏦 Total: ${total_balance:,.2f} {currency}")
+            if frozen_balance > 0:
+                logging.info(
+                    f"   ❄️ Frozen: ${frozen_balance:,.2f} {currency}")
+            return balance
+        except Exception as e:
+            logging.error(f"❌ Failed to fetch Bitunix balance: {e}")
+            raise
 
     def get_pending_positions(self, symbol: str) -> Optional[Position]:
         try:

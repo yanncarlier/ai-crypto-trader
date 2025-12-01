@@ -34,6 +34,19 @@ def validate_config() -> TradingConfig:
         raise
 
 
+def get_live_balance(exchange, currency: str) -> float:
+    """Fetch actual balance from exchange for live trading"""
+    try:
+        balance = exchange.get_account_balance(currency)
+        logging.info(
+            f"💰 Successfully fetched live balance: ${balance:,.2f} {currency}")
+        return balance
+    except Exception as e:
+        logging.error(f"❌ Failed to fetch live balance: {e}")
+        logging.warning("🔄 Using configured initial capital as fallback")
+        return None
+
+
 if __name__ == "__main__":
     try:
         config = validate_config()
@@ -50,14 +63,29 @@ if __name__ == "__main__":
         # Display startup information
         if config.FORWARD_TESTING:
             logging.info("🎯 Starting in PAPER TRADING mode")
+            logging.info(
+                f"💰 Paper Trading Capital: ${config.INITIAL_CAPITAL:,.2f}")
         else:
             logging.info("🎯 Starting in LIVE TRADING mode")
             logging.info(f"🔗 Exchange: {config.EXCHANGE}")
             if config.EXCHANGE == "BINANCE":
                 logging.info(f"🔧 Testnet: {config.TEST_NET}")
-        logging.info(f"💰 Initial Capital: ${config.INITIAL_CAPITAL:,.2f}")
+            # Fetch and display actual balance for live trading
+            actual_balance = get_live_balance(exchange, config.CURRENCY)
+            if actual_balance is not None:
+                # Update the config with the actual balance for position sizing
+                config.INITIAL_CAPITAL = actual_balance
+                logging.info(
+                    f"💰 LIVE ACCOUNT BALANCE: ${actual_balance:,.2f} {config.CURRENCY}")
+            else:
+                logging.warning(
+                    f"⚠️ Using fallback capital: ${config.INITIAL_CAPITAL:,.2f}")
         logging.info(f"⚙️ Trading Pair: {config.SYMBOL}")
         logging.info(f"📈 Cycle: {config.CYCLE_MINUTES} minutes")
+        logging.info(f"⚡ Leverage: {config.LEVERAGE}x")
+        logging.info(f"🛡️ Margin Mode: {config.MARGIN_MODE}")
+        logging.info(f"📊 Position Size: {config.POSITION_SIZE}")
+        logging.info(f"🚨 Stop Loss: {config.STOP_LOSS_PERCENT}%")
         bot = TradingBot(config=config, exchange=exchange)
         bot.run_cycle()
     except Exception as e:

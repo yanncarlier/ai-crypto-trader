@@ -44,9 +44,21 @@ class BinanceFutures(BaseExchange):
         return float(ticker['last'])
 
     def get_account_balance(self, currency: str) -> float:
-        balance = safe_ccxt_call(
-            self.exchange.fetch_balance, params={'type': 'future'})
-        return float(balance['total'].get(currency, 0.0))
+        try:
+            balance = safe_ccxt_call(
+                self.exchange.fetch_balance, params={'type': 'future'})
+            available = float(balance['free'].get(currency, 0.0))
+            total = float(balance['total'].get(currency, 0.0))
+            used = float(balance['used'].get(currency, 0.0))
+            logging.info(f"💰 Binance Balance Details:")
+            logging.info(f"   💵 Available: ${available:,.2f} {currency}")
+            logging.info(f"   🏦 Total: ${total:,.2f} {currency}")
+            if used > 0:
+                logging.info(f"   🔒 Used: ${used:,.2f} {currency}")
+            return available
+        except Exception as e:
+            logging.error(f"❌ Failed to fetch Binance balance: {e}")
+            raise
 
     def get_pending_positions(self, symbol: str) -> Optional[Position]:
         positions = safe_ccxt_call(self.exchange.fetch_positions, [

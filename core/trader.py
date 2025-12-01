@@ -17,11 +17,54 @@ class TradingBot:
         self.config = config
         self.exchange = exchange
         self.health_monitor = HealthMonitor()
+        self.current_balance = None
         configure_logger(config.RUN_NAME)
-        logging.info(
-            f"🔧 Config: {config.CYCLE_MINUTES}min cycles, {config.LEVERAGE}x leverage")
-        logging.info(
-            f"💰 Position size: {config.POSITION_SIZE}, Stop loss: {config.STOP_LOSS_PERCENT}%")
+        # Display configuration
+        mode = "PAPER" if config.FORWARD_TESTING else "LIVE"
+        logging.info(f"🔧 {mode} TRADING CONFIGURATION:")
+        logging.info(f"   📊 Symbol: {config.SYMBOL}")
+        logging.info(f"   ⏱️  Cycle: {config.CYCLE_MINUTES} minutes")
+        logging.info(f"   ⚡ Leverage: {config.LEVERAGE}x")
+        logging.info(f"   🛡️  Margin: {config.MARGIN_MODE}")
+        logging.info(f"   📈 Position: {config.POSITION_SIZE}")
+        logging.info(f"   🚨 Stop Loss: {config.STOP_LOSS_PERCENT}%")
+        if config.FORWARD_TESTING:
+            logging.info(f"   💰 Paper Balance: ${config.INITIAL_CAPITAL:,.2f}")
+        else:
+            # Fetch and display current balance for live trading
+            self._update_live_balance()
+
+    def _update_live_balance(self):
+        """Fetch and update the current balance from the exchange"""
+        try:
+            self.current_balance = self.exchange.get_account_balance(
+                self.config.CURRENCY)
+            logging.info(
+                f"💰 CURRENT LIVE BALANCE: ${self.current_balance:,.2f} {self.config.CURRENCY}")
+        except Exception as e:
+            logging.error(f"❌ Failed to fetch live balance: {e}")
+            # Fallback to configured capital
+            self.current_balance = self.config.INITIAL_CAPITAL
+            logging.warning(
+                f"⚠️ Using fallback balance: ${self.current_balance:,.2f}")
+
+    def _get_effective_balance(self) -> float:
+        """Get the current balance (live or paper)"""
+        if self.config.FORWARD_TESTING:
+            return self.config.INITIAL_CAPITAL
+        else:
+            # For live trading, always fetch fresh balance
+            try:
+                fresh_balance = self.exchange.get_account_balance(
+                    self.config.CURRENCY)
+                if fresh_balance != self.current_balance:
+                    logging.info(
+                        f"🔄 Balance update: ${self.current_balance:,.2f} → ${fresh_balance:,.2f}")
+                    self.current_balance = fresh_balance
+                return fresh_balance
+            except Exception as e:
+                logging.error(f"❌ Failed to refresh balance: {e}")
+                return self.current_balance or self.config.INITIAL_CAPITAL
 
     @retry(stop=stop_after_attempt(2), wait=wait_fixed(3))
     def _get_market_data(self, symbol: str):
@@ -70,9 +113,24 @@ class TradingBot:
             signal.alarm(0)  # Cancel timeout
             signal.signal(signal.SIGALRM, original_handler)
 
+    def _calculate_position_size(self, balance: float) -> float:
+        """Calculate position size based on config and current balance"""
+        if self.config.POSITION_SIZE.endswith('%'):
+            percentage = float(self.config.POSITION_SIZE[:-1]) / 100
+            position_value = balance * percentage
+            logging.info(
+                f"📐 Position calculation: {balance:,.2f} × {percentage:.1%} = ${position_value:,.2f}")
+            return position_value
+        else:
+            fixed_size = float(self.config.POSITION_SIZE)
+            logging.info(f"📐 Fixed position size: ${fixed_size:,.2f}")
+            return fixed_size
+
     def _execute_trading_decision(self, action: str, symbol: str, position):
         """Execute trading decision with detailed error handling"""
         try:
+            # Get current balance for position sizing
+            current_balance = self._get_effective_balance()
             # Configure exchange settings
             logging.info("⚙️ Configuring exchange settings...")
             self.exchange.set_margin_mode(symbol, self.config.MARGIN_MODE)
@@ -83,7 +141,9 @@ class TradingBot:
                     logging.info(
                         "🔄 Reversing position: Closing current position")
                     self.exchange.flash_close_position(symbol)
-                logging.info("📈 Opening LONG position")
+                position_value = self._calculate_position_size(current_balance)
+                logging.info(
+                    f"📈 Opening LONG position (${position_value:,.2f})")
                 self.exchange.open_position(
                     symbol, "buy", self.config.POSITION_SIZE, self.config.STOP_LOSS_PERCENT
                 )
@@ -92,7 +152,9 @@ class TradingBot:
                     logging.info(
                         "🔄 Reversing position: Closing current position")
                     self.exchange.flash_close_position(symbol)
-                logging.info("📉 Opening SHORT position")
+                position_value = self._calculate_position_size(current_balance)
+                logging.info(
+                    f"📉 Opening SHORT position (${position_value:,.2f})")
                 self.exchange.open_position(
                     symbol, "sell", self.config.POSITION_SIZE, self.config.STOP_LOSS_PERCENT
                 )
@@ -124,6 +186,10 @@ class TradingBot:
         logging.info("🔄 NEW TRADING CYCLE STARTED")
         logging.info("🔄 " + "=" * 50)
         symbol = self.config.SYMBOL
+        # Display current balance at the start of each cycle
+        current_balance = self._get_effective_balance()
+        logging.info(
+            f"💰 CURRENT BALANCE: ${current_balance:,.2f} {self.config.CURRENCY}")
         # Get market data
         try:
             price, change_pct, volume = self._get_market_data_with_fallback(
@@ -162,6 +228,10 @@ class TradingBot:
         action_emoji = action_emojis.get(action, "❓")
         logging.info(f"⚡ TRADING ACTION: {action_emoji} {action:>15}")
         logging.info(f"📦 CURRENT POSITION: {current_side}")
+        # Calculate and display intended position size
+        if action in ("OPEN_LONG", "REVERSE_TO_LONG", "OPEN_SHORT", "REVERSE_TO_SHORT"):
+            position_value = self._calculate_position_size(current_balance)
+            logging.info(f"💎 INTENDED POSITION SIZE: ${position_value:,.2f}")
         # Execute trading decision
         self._execute_trading_decision(action, symbol, position)
         # Log cycle completion
