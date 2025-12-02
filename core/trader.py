@@ -22,42 +22,6 @@ class TradingBot:
         logging.info(
             f"{mode} | {config.SYMBOL} | {config.CYCLE_MINUTES}min | {config.LEVERAGE}x")
         logging.info(f"AI: {config.LLM_PROVIDER} ({config.LLM_MODEL})")
-        # Display initial account status
-        if not config.FORWARD_TESTING:
-            self._log_account_status()
-
-    def _log_account_status(self):
-        """Log complete account status including positions"""
-        try:
-            # Get account summary from exchange
-            summary = self.exchange.get_account_summary(
-                self.config.CURRENCY, self.config.SYMBOL)
-            logging.info("=" * 50)
-            logging.info("📊 ACCOUNT SUMMARY:")
-            logging.info(
-                f"   Available: ${summary['balance']:,.2f} {summary['currency']}")
-            logging.info(f"   Positions: {summary['total_positions']}")
-            if summary['positions']:
-                for i, position in enumerate(summary['positions'], 1):
-                    current_price = self.exchange.get_current_price(
-                        position.symbol)
-                    position_value = position.size * current_price
-                    pnl = (current_price - position.entry_price) * \
-                        position.size
-                    pnl_pct = ((current_price - position.entry_price) /
-                               position.entry_price) * 100
-                    logging.info(f"   Position {i}:")
-                    logging.info(f"     Side: {position.side}")
-                    logging.info(f"     Size: {position.size:.4f} BTC")
-                    logging.info(f"     Entry: ${position.entry_price:,.2f}")
-                    logging.info(f"     Current: ${current_price:,.2f}")
-                    logging.info(f"     Value: ${position_value:,.2f}")
-                    logging.info(f"     PnL: ${pnl:+.2f} ({pnl_pct:+.2f}%)")
-            else:
-                logging.info("   No open positions")
-            logging.info("=" * 50)
-        except Exception as e:
-            logging.warning(f"Could not fetch account status: {e}")
 
     def _get_effective_balance(self) -> float:
         """Get the current balance (live or paper)"""
@@ -129,7 +93,6 @@ class TradingBot:
                     self.exchange.flash_close_position(symbol)
                 position_value = self._calculate_position_value(
                     current_balance)
-                logging.info(f"📈 Opening LONG ${position_value:,.0f}")
                 self.exchange.open_position(
                     symbol, "buy", self.config.POSITION_SIZE, self.config.STOP_LOSS_PERCENT
                 )
@@ -139,12 +102,11 @@ class TradingBot:
                     self.exchange.flash_close_position(symbol)
                 position_value = self._calculate_position_value(
                     current_balance)
-                logging.info(f"📉 Opening SHORT ${position_value:,.0f}")
                 self.exchange.open_position(
                     symbol, "sell", self.config.POSITION_SIZE, self.config.STOP_LOSS_PERCENT
                 )
             elif action == "CLOSE" and position:
-                logging.info("🔒 Closing position on neutral signal")
+                logging.info("🔒 Closing position")
                 self.exchange.flash_close_position(symbol)
             else:
                 if position:
@@ -155,7 +117,7 @@ class TradingBot:
                     pnl_pct = ((current_price - position.entry_price) /
                                position.entry_price) * 100
                     logging.info(
-                        f"⏸️ Holding {position.side} position | PnL: ${pnl:+.2f} ({pnl_pct:+.2f}%)")
+                        f"⏸️ Holding {position.side} | PnL: ${pnl:+.2f} ({pnl_pct:+.2f}%)")
                 else:
                     logging.info("💤 Staying flat")
         except Exception as e:
@@ -163,9 +125,6 @@ class TradingBot:
 
     def run_cycle(self):
         symbol = self.config.SYMBOL
-        # Log current account status at start of cycle
-        if not self.config.FORWARD_TESTING:
-            self._log_account_status()
         # Get market data
         try:
             price, change_pct, volume = self._get_market_data(symbol)

@@ -59,8 +59,7 @@ if __name__ == "__main__":
             try:
                 live_balance = exchange.get_account_balance(config.CURRENCY)
                 config.INITIAL_CAPITAL = live_balance
-                print(
-                    f"💰 Bitunix Balance: ${live_balance:,.2f} {config.CURRENCY}")
+                print(f"💰 Balance: ${live_balance:,.2f} {config.CURRENCY}")
             except Exception as e:
                 print(f"⚠️ Could not fetch balance: {e}")
         bot = TradingBot(config=config, exchange=exchange)

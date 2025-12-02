@@ -115,13 +115,12 @@ class BitunixFutures(BaseExchange):
             # Total available balance = USDT + BTC converted to USDT
             total_available = usdt_balance + btc_in_usdt
             total_equity = total_usdt + total_btc_in_usdt
-            # Log detailed balance
-            logging.info(f"💰 USDT Balance: ${usdt_balance:,.2f} available")
+            # Log concise balance summary
             if btc_balance > 0:
                 logging.info(
-                    f"💰 BTC Balance: {btc_balance:.8f} BTC (≈${btc_in_usdt:,.2f})")
-            logging.info(f"📊 Total Available: ${total_available:,.2f}")
-            logging.info(f"📈 Total Equity: ${total_equity:,.2f}")
+                    f"💰 Balance: ${total_available:,.2f} (${usdt_balance:,.2f} USDT + {btc_balance:.6f} BTC)")
+            else:
+                logging.info(f"💰 Balance: ${total_available:,.2f} USDT")
             return total_available  # Return total available in USDT
         except Exception as e:
             logging.error(f"❌ Failed to fetch balance: {e}")
@@ -136,27 +135,13 @@ class BitunixFutures(BaseExchange):
             for pos in data:
                 if pos.get("symbol") == symbol and float(pos.get("qty", 0)) != 0:
                     side = "BUY" if float(pos["qty"]) > 0 else "SELL"
-                    position = Position(
+                    return Position(
                         positionId=pos["positionId"],
                         side=side,
                         size=abs(float(pos["qty"])),
                         entry_price=float(pos["avgOpenPrice"]),
                         symbol=symbol,
                     )
-                    # Calculate position details
-                    current_price = self.get_current_price(symbol)
-                    position_value = position.size * current_price
-                    pnl = (current_price - position.entry_price) * \
-                        position.size
-                    pnl_pct = ((current_price - position.entry_price) /
-                               position.entry_price) * 100
-                    logging.info(f"📦 Existing {side} position:")
-                    logging.info(f"   Size: {position.size:.4f} BTC")
-                    logging.info(f"   Entry: ${position.entry_price:,.2f}")
-                    logging.info(f"   Current: ${current_price:,.2f}")
-                    logging.info(f"   PnL: ${pnl:+.2f} ({pnl_pct:+.2f}%)")
-                    logging.info(f"   Value: ${position_value:,.2f}")
-                    return position
         except Exception as e:
             logging.warning(f"Failed to fetch positions: {e}")
         return None
@@ -224,39 +209,36 @@ class BitunixFutures(BaseExchange):
         if size.endswith("%"):
             percentage = float(size[:-1]) / 100
             if existing_position and existing_position.side.lower() == side.lower():
-                # If we're adding to existing position in same direction
+                # Adding to existing position in same direction
                 current_position_value = existing_position.size * price
                 max_additional_value = balance * percentage
                 total_desired_value = current_position_value + max_additional_value
-                # Check if we're exceeding available balance
                 if max_additional_value > balance:
                     logging.warning(
-                        f"Not enough balance to add to position. Available: ${balance:,.2f}")
+                        f"Not enough balance. Available: ${balance:,.2f}")
                     return
                 additional_qty = max_additional_value / price
                 total_qty = existing_position.size + additional_qty
-                logging.info(f"📈 Adding to existing {side} position:")
-                logging.info(f"   Current: {existing_position.size:.4f} BTC")
-                logging.info(f"   Adding: {additional_qty:.4f} BTC")
-                logging.info(f"   New total: {total_qty:.4f} BTC")
-                # We need to close existing and open new combined position
+                # Close existing and open new combined position
                 if existing_position:
                     self.flash_close_position(symbol)
-                # Open new combined position
                 usdt_value = total_desired_value
                 qty = total_qty
+                action = "Added to"
             else:
                 # New position or reversing
                 usdt_value = balance * percentage
                 qty = usdt_value / price
+                action = "Opened"
         else:
             usdt_value = float(size)
             qty = usdt_value / price
+            action = "Opened"
         # Validate minimum quantity
         MIN_QTY = 0.0001
         if qty < MIN_QTY:
             logging.warning(
-                f"Position size too small ({qty:.6f} BTC). Minimum is {MIN_QTY} BTC")
+                f"Position too small ({qty:.6f} BTC). Min: {MIN_QTY} BTC")
             return
         qty = round(qty, 4)
         # Prepare order
@@ -281,12 +263,10 @@ class BitunixFutures(BaseExchange):
             })
         # Execute trade
         self._post("/trade/place_order", order_data)
-        # Log trade details
-        action = "Added to" if existing_position and existing_position.side.lower(
-        ) == side.lower() else "Opened"
-        sl_text = f" | SL {sl_pct}%" if sl_pct else ""
+        # Log concise trade details
+        sl_text = f" | SL: {sl_pct}%" if sl_pct else ""
         logging.info(
-            f"✅ {action} {side.upper()} {qty:.4f} BTC (~${usdt_value:,.1f}) @ ${price:,.2f}{sl_text}")
+            f"✅ {action} {side.upper()} {qty:.4f} BTC @ ${price:,.2f}{sl_text}")
 
     def flash_close_position(self, symbol: str):
         position = self.get_pending_positions(symbol)
@@ -301,11 +281,9 @@ class BitunixFutures(BaseExchange):
         # Close position
         self._post("/trade/flash_close_position",
                    {"positionId": position.positionId})
-        logging.info(f"🔒 Closed {position.side} position:")
-        logging.info(f"   Size: {position.size:.4f} BTC")
-        logging.info(f"   Entry: ${position.entry_price:,.2f}")
-        logging.info(f"   Exit: ${current_price:,.2f}")
-        logging.info(f"   PnL: ${pnl:+.2f} ({pnl_pct:+.2f}%)")
+        # Log concise closing details
+        logging.info(
+            f"🔒 Closed {position.side} {position.size:.4f} BTC | PnL: ${pnl:+.2f} ({pnl_pct:+.2f}%)")
 
     def fetch_ohlcv(self, symbol: str, timeframe: str = "1m", limit: int = 15):
         data = self._public_get(
