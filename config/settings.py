@@ -9,7 +9,7 @@ class TradingConfig:
     CRYPTO: str = "Bitcoin"
     SYMBOL: str = "BTCUSDT"
     CURRENCY: str = "USDT"
-    CYCLE_MINUTES: int = 10
+    CYCLE_MINUTES: int = 10  # Dynamic cycle length - you can change this to any value
     LEVERAGE: int = 2
     MARGIN_MODE: str = "ISOLATED"  # "ISOLATED" or "CROSS"
     POSITION_SIZE: str = "10%"     # "10%", "50%", or "500" (fixed USDT)
@@ -30,4 +30,4 @@ class TradingConfig:
     @property
     def RUN_NAME(self) -> str:
         mode = "paper" if self.FORWARD_TESTING else "LIVE"
-        return f"{mode}_{self.EXCHANGE}_{self.CRYPTO}_{self.SYMBOL}_{self.LEVERAGE}x"
+        return f"{mode}_{self.EXCHANGE}_{self.CRYPTO}_{self.SYMBOL}_{self.CYCLE_MINUTES}min_{self.LEVERAGE}x"

@@ -16,18 +16,19 @@ def create_config() -> TradingConfig:
         # Get FORWARD_TESTING from .env
         forward_testing = os.getenv(
             "FORWARD_TESTING", "false").lower() in ("true", "1", "yes")
-        # Create config with all defaults from settings.py, overriding FORWARD_TESTING from .env
-        # Force Bitunix as exchange
+        # Create config with all defaults from settings.py
         config = TradingConfig(
             FORWARD_TESTING=forward_testing,
             EXCHANGE="BITUNIX",  # Force Bitunix
-            TEST_NET=False  # Bitunix doesn't have testnet
+            TEST_NET=False,  # Bitunix doesn't have testnet
         )
         # Validate settings
         if config.LEVERAGE < 1 or config.LEVERAGE > 125:
             raise ValueError("Leverage must be between 1 and 125")
         if config.MARGIN_MODE.upper() not in ['ISOLATED', 'CROSS']:
             raise ValueError("Margin mode must be ISOLATED or CROSS")
+        if config.CYCLE_MINUTES < 1:
+            raise ValueError("CYCLE_MINUTES must be at least 1")
         return config
     except Exception as e:
         print(f"Configuration error: {e}")
@@ -43,6 +44,7 @@ if __name__ == "__main__":
         print(f"📊 Symbol: {config.SYMBOL} | Leverage: {config.LEVERAGE}x")
         print(
             f"📈 Position: {config.POSITION_SIZE} | Stop Loss: {config.STOP_LOSS_PERCENT}%")
+        print(f"⏱️  Cycle: {config.CYCLE_MINUTES} minutes")
         if config.FORWARD_TESTING:
             print("📝 Running in PAPER TRADING mode")
             from exchanges.forward_tester import ForwardTester

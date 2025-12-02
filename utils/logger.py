@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 def configure_logger(run_name: str):
-    """Configure minimal logging"""
+    """Configure minimal logging to file and console"""
     # Create logs directory
     logs_dir = Path("logs")
     logs_dir.mkdir(exist_ok=True)
