@@ -24,5 +24,3 @@ Respond with valid JSON only (no markdown, no extra text):
   "reasons": "Brief technical + sentiment reasoning focusing on {cycle}-minute timeframe, using exact price ${price:,.2f}, {change_pct:+.2f}% change, and volume activity (${volume_cycle:,.0f} in {cycle}min vs ${volume_24h:,.0f} 24h)."
 }}
 """.strip()
-
-
