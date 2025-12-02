@@ -22,6 +22,42 @@ class TradingBot:
         logging.info(
             f"{mode} | {config.SYMBOL} | {config.CYCLE_MINUTES}min | {config.LEVERAGE}x")
         logging.info(f"AI: {config.LLM_PROVIDER} ({config.LLM_MODEL})")
+        # Display initial account status
+        if not config.FORWARD_TESTING:
+            self._log_account_status()
+
+    def _log_account_status(self):
+        """Log complete account status including positions"""
+        try:
+            # Get account summary from exchange
+            summary = self.exchange.get_account_summary(
+                self.config.CURRENCY, self.config.SYMBOL)
+            logging.info("=" * 50)
+            logging.info("📊 ACCOUNT SUMMARY:")
+            logging.info(
+                f"   Available: ${summary['balance']:,.2f} {summary['currency']}")
+            logging.info(f"   Positions: {summary['total_positions']}")
+            if summary['positions']:
+                for i, position in enumerate(summary['positions'], 1):
+                    current_price = self.exchange.get_current_price(
+                        position.symbol)
+                    position_value = position.size * current_price
+                    pnl = (current_price - position.entry_price) * \
+                        position.size
+                    pnl_pct = ((current_price - position.entry_price) /
+                               position.entry_price) * 100
+                    logging.info(f"   Position {i}:")
+                    logging.info(f"     Side: {position.side}")
+                    logging.info(f"     Size: {position.size:.4f} BTC")
+                    logging.info(f"     Entry: ${position.entry_price:,.2f}")
+                    logging.info(f"     Current: ${current_price:,.2f}")
+                    logging.info(f"     Value: ${position_value:,.2f}")
+                    logging.info(f"     PnL: ${pnl:+.2f} ({pnl_pct:+.2f}%)")
+            else:
+                logging.info("   No open positions")
+            logging.info("=" * 50)
+        except Exception as e:
+            logging.warning(f"Could not fetch account status: {e}")
 
     def _get_effective_balance(self) -> float:
         """Get the current balance (live or paper)"""
@@ -79,40 +115,57 @@ class TradingBot:
             return float(self.config.POSITION_SIZE)
 
     def _execute_trading_decision(self, action: str, symbol: str, position):
-        """Execute trading decision"""
+        """Execute trading decision with position awareness"""
         try:
             current_balance = self._get_effective_balance()
+            # Get current position details for better decision making
+            current_position = self.exchange.get_pending_positions(symbol)
             # Set exchange parameters
             self.exchange.set_margin_mode(symbol, self.config.MARGIN_MODE)
             self.exchange.set_leverage(symbol, self.config.LEVERAGE)
             if action in ("OPEN_LONG", "REVERSE_TO_LONG"):
                 if "REVERSE" in action and position:
+                    logging.info("🔄 Reversing from SHORT to LONG")
                     self.exchange.flash_close_position(symbol)
                 position_value = self._calculate_position_value(
                     current_balance)
-                logging.info(f"Opening LONG ${position_value:,.0f}")
+                logging.info(f"📈 Opening LONG ${position_value:,.0f}")
                 self.exchange.open_position(
                     symbol, "buy", self.config.POSITION_SIZE, self.config.STOP_LOSS_PERCENT
                 )
             elif action in ("OPEN_SHORT", "REVERSE_TO_SHORT"):
                 if "REVERSE" in action and position:
+                    logging.info("🔄 Reversing from LONG to SHORT")
                     self.exchange.flash_close_position(symbol)
                 position_value = self._calculate_position_value(
                     current_balance)
-                logging.info(f"Opening SHORT ${position_value:,.0f}")
+                logging.info(f"📉 Opening SHORT ${position_value:,.0f}")
                 self.exchange.open_position(
                     symbol, "sell", self.config.POSITION_SIZE, self.config.STOP_LOSS_PERCENT
                 )
             elif action == "CLOSE" and position:
-                logging.info("Closing position")
+                logging.info("🔒 Closing position on neutral signal")
                 self.exchange.flash_close_position(symbol)
             else:
-                logging.info("No action")
+                if position:
+                    # Calculate PnL for existing position
+                    current_price = self.exchange.get_current_price(symbol)
+                    pnl = (current_price - position.entry_price) * \
+                        position.size
+                    pnl_pct = ((current_price - position.entry_price) /
+                               position.entry_price) * 100
+                    logging.info(
+                        f"⏸️ Holding {position.side} position | PnL: ${pnl:+.2f} ({pnl_pct:+.2f}%)")
+                else:
+                    logging.info("💤 Staying flat")
         except Exception as e:
             logging.error(f"Trade failed: {e}")
 
     def run_cycle(self):
         symbol = self.config.SYMBOL
+        # Log current account status at start of cycle
+        if not self.config.FORWARD_TESTING:
+            self._log_account_status()
         # Get market data
         try:
             price, change_pct, volume = self._get_market_data(symbol)
@@ -128,8 +181,16 @@ class TradingBot:
         position = self.exchange.get_pending_positions(symbol)
         current_side = position.side if position else "FLAT"
         action = get_action(interpretation, current_side)
-        # Log decision
-        logging.info(
-            f"${price:,.0f} | Δ{change_pct:+.1f}% | AI: {interpretation} | Pos: {current_side} → {action}")
+        # Log decision with context
+        if position:
+            current_price = self.exchange.get_current_price(symbol)
+            pnl = (current_price - position.entry_price) * position.size
+            pnl_pct = ((current_price - position.entry_price) /
+                       position.entry_price) * 100
+            logging.info(
+                f"${price:,.0f} | Δ{change_pct:+.1f}% | AI: {interpretation} | Pos: {current_side} (${pnl:+.0f}) → {action}")
+        else:
+            logging.info(
+                f"${price:,.0f} | Δ{change_pct:+.1f}% | AI: {interpretation} | Pos: {current_side} → {action}")
         # Execute trade
         self._execute_trading_decision(action, symbol, position)

@@ -1,5 +1,6 @@
+# exchanges/base.py
 from abc import ABC, abstractmethod
-from typing import Any, Optional
+from typing import Any, Optional, List, Dict
 
 
 class Position:
@@ -9,6 +10,11 @@ class Position:
         self.size = size
         self.entry_price = entry_price
         self.symbol = symbol
+        self.pnl: float = 0.0  # Profit/Loss in USD
+        self.pnl_percent: float = 0.0  # Profit/Loss percentage
+
+    def __str__(self):
+        return f"{self.side} {self.size:.4f} {self.symbol} @ ${self.entry_price:,.2f}"
 
 
 class BaseExchange(ABC):
@@ -18,6 +24,13 @@ class BaseExchange(ABC):
     def get_account_balance(self, currency: str) -> float: ...
     @abstractmethod
     def get_pending_positions(self, symbol: str) -> Optional[Position]: ...
+    @abstractmethod
+    def get_all_positions(self, symbol: str) -> List[Position]: ...
+
+    @abstractmethod
+    def get_account_summary(self, currency: str,
+                            symbol: str) -> Dict[str, Any]: ...
+
     @abstractmethod
     def set_leverage(self, symbol: str, leverage: int): ...
     @abstractmethod

@@ -1,7 +1,7 @@
 # exchanges/binance.py
 import ccxt
 import logging
-from typing import Optional
+from typing import Optional, List, Dict, Any
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from exchanges.base import BaseExchange, Position
 
@@ -44,21 +44,9 @@ class BinanceFutures(BaseExchange):
         return float(ticker['last'])
 
     def get_account_balance(self, currency: str) -> float:
-        try:
-            balance = safe_ccxt_call(
-                self.exchange.fetch_balance, params={'type': 'future'})
-            available = float(balance['free'].get(currency, 0.0))
-            total = float(balance['total'].get(currency, 0.0))
-            used = float(balance['used'].get(currency, 0.0))
-            logging.info(f"💰 Binance Balance Details:")
-            logging.info(f"   💵 Available: ${available:,.2f} {currency}")
-            logging.info(f"   🏦 Total: ${total:,.2f} {currency}")
-            if used > 0:
-                logging.info(f"   🔒 Used: ${used:,.2f} {currency}")
-            return available
-        except Exception as e:
-            logging.error(f"❌ Failed to fetch Binance balance: {e}")
-            raise
+        balance = safe_ccxt_call(
+            self.exchange.fetch_balance, params={'type': 'future'})
+        return float(balance['total'].get(currency, 0.0))
 
     def get_pending_positions(self, symbol: str) -> Optional[Position]:
         positions = safe_ccxt_call(self.exchange.fetch_positions, [
@@ -73,6 +61,43 @@ class BinanceFutures(BaseExchange):
                     symbol=symbol
                 )
         return None
+
+    def get_all_positions(self, symbol: str) -> List[Position]:
+        positions = []
+        fetched_positions = safe_ccxt_call(self.exchange.fetch_positions, [
+                                           symbol], params={'type': 'future'})
+        for pos in fetched_positions:
+            if pos['contracts'] and float(pos['contracts']) > 0:
+                positions.append(Position(
+                    positionId=pos['info']['positionId'],
+                    side=pos['side'].upper(),
+                    size=float(pos['contracts']),
+                    entry_price=float(pos['entryPrice']),
+                    symbol=symbol
+                ))
+        return positions
+
+    def get_account_summary(self, currency: str, symbol: str) -> Dict[str, Any]:
+        """Get complete account summary including balance and positions"""
+        balance = self.get_account_balance(currency)
+        positions = self.get_all_positions(symbol)
+        current_price = self.get_current_price(symbol)
+        total_exposure = 0.0
+        for position in positions:
+            position_value = position.size * current_price
+            total_exposure += position_value
+            # Calculate PnL
+            pnl = (current_price - position.entry_price) * position.size
+            position.pnl = pnl
+            position.pnl_percent = (
+                (current_price - position.entry_price) / position.entry_price) * 100
+        return {
+            "balance": balance,
+            "currency": currency,
+            "positions": positions,
+            "total_positions": len(positions),
+            "total_exposure": total_exposure,
+        }
 
     def set_leverage(self, symbol: str, leverage: int):
         safe_ccxt_call(self.exchange.set_leverage, leverage,
