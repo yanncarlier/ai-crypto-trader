@@ -97,36 +97,35 @@ class BitunixFutures(BaseExchange):
                 return price
         raise ValueError(f"Price not found for {symbol}")
 
-
-def get_account_balance(self, currency: str) -> float:
-    """Get total account balance in USDT (including BTC converted to USDT)"""
-    try:
-        # Get USDT balance
-        data_usdt = self._get("/account", {"marginCoin": "USDT"})
-        usdt_balance = float(data_usdt.get("available") or 0.0)
-        total_usdt = float(data_usdt.get("total") or 0.0)
-        # Get BTC balance
-        data_btc = self._get("/account", {"marginCoin": "BTC"})
-        btc_balance = float(data_btc.get("available") or 0.0)
-        total_btc = float(data_btc.get("total") or 0.0)
-        # Get current BTC price to convert to USDT
-        btc_price = self.get_current_price("BTCUSDT")
-        btc_in_usdt = btc_balance * btc_price
-        total_btc_in_usdt = total_btc * btc_price
-        # Total available balance = USDT + BTC converted to USDT
-        total_available = usdt_balance + btc_in_usdt
-        total_equity = total_usdt + total_btc_in_usdt
-        # Log detailed balance
-        logging.info(f"💰 USDT Balance: ${usdt_balance:,.2f} available")
-        if btc_balance > 0:
-            logging.info(
-                f"💰 BTC Balance: {btc_balance:.8f} BTC (≈${btc_in_usdt:,.2f})")
-        logging.info(f"📊 Total Available: ${total_available:,.2f}")
-        logging.info(f"📈 Total Equity: ${total_equity:,.2f}")
-        return total_available  # Return total available in USDT
-    except Exception as e:
-        logging.error(f"❌ Failed to fetch balance: {e}")
-        return 0.0
+    def get_account_balance(self, currency: str) -> float:
+        """Get total account balance in USDT (including BTC converted to USDT)"""
+        try:
+            # Get USDT balance
+            data_usdt = self._get("/account", {"marginCoin": "USDT"})
+            usdt_balance = float(data_usdt.get("available") or 0.0)
+            total_usdt = float(data_usdt.get("total") or 0.0)
+            # Get BTC balance
+            data_btc = self._get("/account", {"marginCoin": "BTC"})
+            btc_balance = float(data_btc.get("available") or 0.0)
+            total_btc = float(data_btc.get("total") or 0.0)
+            # Get current BTC price to convert to USDT
+            btc_price = self.get_current_price("BTCUSDT")
+            btc_in_usdt = btc_balance * btc_price
+            total_btc_in_usdt = total_btc * btc_price
+            # Total available balance = USDT + BTC converted to USDT
+            total_available = usdt_balance + btc_in_usdt
+            total_equity = total_usdt + total_btc_in_usdt
+            # Log detailed balance
+            logging.info(f"💰 USDT Balance: ${usdt_balance:,.2f} available")
+            if btc_balance > 0:
+                logging.info(
+                    f"💰 BTC Balance: {btc_balance:.8f} BTC (≈${btc_in_usdt:,.2f})")
+            logging.info(f"📊 Total Available: ${total_available:,.2f}")
+            logging.info(f"📈 Total Equity: ${total_equity:,.2f}")
+            return total_available  # Return total available in USDT
+        except Exception as e:
+            logging.error(f"❌ Failed to fetch balance: {e}")
+            return 0.0
 
     def get_pending_positions(self, symbol: str) -> Optional[Position]:
         try:
@@ -244,7 +243,6 @@ def get_account_balance(self, currency: str) -> float:
                 if existing_position:
                     self.flash_close_position(symbol)
                 # Open new combined position
-                combined_size = f"${total_desired_value}"
                 usdt_value = total_desired_value
                 qty = total_qty
             else:
