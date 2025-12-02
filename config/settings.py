@@ -1,4 +1,4 @@
-# settings.py
+# config/settings.py
 from dataclasses import dataclass
 from typing import Optional
 
