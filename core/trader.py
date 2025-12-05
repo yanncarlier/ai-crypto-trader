@@ -5,9 +5,7 @@ import time
 import signal
 from config.settings import TradingConfig
 from exchanges.base import BaseExchange
-# from ai.prompt_builder import build_prompt
-from ai.prompt_builder_grok import build_prompt
-# from ai.prompt_builder_gemini import build_prompt
+from ai.prompt_builder import build_prompt
 from ai.provider import send_request, save_response, AIOutlook
 from utils.logger import configure_logger
 from core.decision_engine import get_action
