@@ -20,7 +20,7 @@ class TradingConfig:
     # Configuration
     FORWARD_TESTING: bool = False  # true for paper trading
     # "xai", "groq", "openai", "openrouter", "deepseek", "mistral"
-    LLM_PROVIDER: str = "xai"
+    LLM_PROVIDER: str = "deepseek"
     LLM_MODEL: str = "default"  # Will use provider defaults if set to "default"
     LLM_TEMPERATURE: float = 0.2
     LLM_MAX_TOKENS: int = 800
