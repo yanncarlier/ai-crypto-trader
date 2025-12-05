@@ -2,7 +2,6 @@
 import os
 import json
 import logging
-from pathlib import Path
 from datetime import datetime
 from typing import Literal
 import requests
@@ -79,21 +78,9 @@ def send_request(prompt: str, config: TradingConfig, api_key: str | None = None)
 
 
 def save_response(outlook: AIOutlook, run_name: str) -> None:
+    """Save AI response to console only (no file saving)"""
     try:
-        path = Path("logs/ai_responses")
-        path.mkdir(parents=True, exist_ok=True)
-        date_str = datetime.now().strftime('%Y%m%d')
-        file = path / f"{run_name}_{date_str}.json"
-        data = {}
-        if file.exists():
-            try:
-                with open(file, 'r') as f:
-                    data = json.load(f)
-            except:
-                pass
-        timestamp = datetime.utcnow().isoformat()
-        data[timestamp] = outlook.model_dump()
-        with open(file, 'w') as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
+        logging.info(f"🤖 AI Response: {outlook.interpretation}")
+        logging.info(f"   Reasons: {outlook.reasons[:200]}")
     except Exception:
         pass
