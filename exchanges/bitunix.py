@@ -4,10 +4,13 @@ import hashlib
 import time
 import secrets
 import logging
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 import requests
+import asyncio
+import time
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from exchanges.base import BaseExchange, Position
+from utils.risk_manager import RiskManager
 API_URL = "https://fapi.bitunix.com/api/v1/futures"
 TIMEOUT = 10
 
@@ -35,11 +38,14 @@ class BitunixAuth:
 
 
 class BitunixFutures(BaseExchange):
-    def __init__(self, api_key: str, api_secret: str):
+    def __init__(self, api_key: str, api_secret: str, config=None):
         self.auth = BitunixAuth(api_key, api_secret)
+        self.config = config
         self.last_request_time = 0
         self.min_request_interval = 0.1
-        self.symbol = "BTCUSDT"  # Default symbol
+        self.symbol = config.SYMBOL if config else "BTCUSDT"
+        self.risk_manager = RiskManager(config, self) if config else None
+        self._monitor_task = None
 
     def _rate_limit(self):
         elapsed = time.time() - self.last_request_time
@@ -171,23 +177,33 @@ class BitunixFutures(BaseExchange):
         """Get complete account summary including balance and positions"""
         balance = self.get_account_balance(currency)
         positions = self.get_all_positions(symbol)
+        current_price = self.get_current_price(symbol)
+        
         summary = {
             "balance": balance,
+            "equity": balance,
             "currency": currency,
             "positions": positions,
             "total_positions": len(positions),
             "total_exposure": 0.0,
+            "unrealized_pnl": 0.0,
+            "leverage": getattr(self.config, 'LEVERAGE', 1)
         }
+        
         if positions:
-            current_price = self.get_current_price(symbol)
             for position in positions:
                 position_value = position.size * current_price
                 summary["total_exposure"] += position_value
                 # Calculate PnL for each position
                 pnl = (current_price - position.entry_price) * position.size
+                if position.side == 'SELL':
+                    pnl = -pnl
                 position.pnl = pnl
-                position.pnl_percent = (
-                    (current_price - position.entry_price) / position.entry_price) * 100
+                position.pnl_percent = ((current_price - position.entry_price) / position.entry_price) * 100
+                summary["unrealized_pnl"] += pnl
+            
+            summary["equity"] = balance + summary["unrealized_pnl"]
+            
         return summary
 
     def set_leverage(self, symbol: str, leverage: int):
@@ -199,86 +215,204 @@ class BitunixFutures(BaseExchange):
         self._post("/account/change_margin_mode",
                    {"symbol": symbol, "marginMode": mode_str, "marginCoin": "USDT"})
 
-    def open_position(self, symbol: str, side: str, size: str, sl_pct: Optional[int]):
-        # Get account summary first
-        summary = self.get_account_summary("USDT", symbol)
-        balance = summary["balance"]
-        existing_position = summary["positions"][0] if summary["positions"] else None
-        price = self.get_current_price(symbol)
-        # Calculate position size considering existing position
-        if size.endswith("%"):
-            percentage = float(size[:-1]) / 100
-            if existing_position and existing_position.side.lower() == side.lower():
-                # Adding to existing position in same direction
-                current_position_value = existing_position.size * price
-                max_additional_value = balance * percentage
-                total_desired_value = current_position_value + max_additional_value
-                if max_additional_value > balance:
-                    logging.warning(
-                        f"Not enough balance. Available: ${balance:,.2f}")
-                    return
-                additional_qty = max_additional_value / price
-                total_qty = existing_position.size + additional_qty
-                # Close existing and open new combined position
-                if existing_position:
-                    self.flash_close_position(symbol)
-                usdt_value = total_desired_value
-                qty = total_qty
-                action = "Added to"
+    async def open_position(self, symbol: str, side: str, size: str, 
+                          sl_pct: Optional[float] = None, 
+                          tp_pct: Optional[float] = None) -> Dict:
+        """Open a new position with risk management"""
+        try:
+            # Check risk limits before opening position
+            if self.risk_manager:
+                can_trade, reason = await self.risk_manager.check_risk_limits(symbol)
+                if not can_trade:
+                    raise ValueError(f"Risk limit reached: {reason}")
+            
+            # Get current price for position sizing
+            current_price = self.get_current_price(symbol)
+            
+            # Calculate position size with risk management
+            if self.risk_manager:
+                position_size, risk_metrics = await self.risk_manager.calculate_position_size(symbol, current_price)
+                max_position_value = risk_metrics.get('max_position_value', float('inf'))
+                
+                # Convert size to float if it's a percentage
+                if isinstance(size, str) and '%' in size:
+                    size_pct = float(size.strip('%')) / 100
+                    balance = self.get_account_balance('USDT')
+                    size = (balance * size_pct) / current_price
+                else:
+                    size = float(size)
+                
+                # Apply position size limits
+                size = min(size, max_position_value / current_price)
             else:
-                # New position or reversing
-                usdt_value = balance * percentage
-                qty = usdt_value / price
-                action = "Opened"
-        else:
-            usdt_value = float(size)
-            qty = usdt_value / price
-            action = "Opened"
-        # Validate minimum quantity
-        MIN_QTY = 0.0001
-        if qty < MIN_QTY:
-            logging.warning(
-                f"Position too small ({qty:.6f} BTC). Min: {MIN_QTY} BTC")
-            return
-        qty = round(qty, 4)
-        # Prepare order
-        order_data = {
-            "symbol": symbol,
-            "qty": str(qty),
-            "side": side.upper(),
-            "tradeSide": "OPEN",
-            "orderType": "MARKET",
-            "marginCoin": "USDT",
-        }
-        # Add stop loss if specified
-        if sl_pct:
-            if side.lower() == "buy":
-                sl_price = price * (1 - sl_pct / 100)
-            else:
-                sl_price = price * (1 + sl_pct / 100)
-            order_data.update({
-                "slPrice": str(round(sl_price, 2)),
-                "slStopType": "MARK_PRICE",
-                "slOrderType": "MARKET",
+                # Fallback to simple position sizing
+                if isinstance(size, str) and '%' in size:
+                    size_pct = float(size.strip('%')) / 100
+                    balance = self.get_account_balance('USDT')
+                    size = (balance * size_pct) / current_price
+                else:
+                    size = float(size)
+            
+            # Place the order
+            order = self._post("/trade/place_order", {
+                "symbol": symbol,
+                "qty": str(size),
+                "side": side.upper(),
+                "tradeSide": "OPEN",
+                "orderType": "MARKET",
+                "marginCoin": "USDT",
             })
-        # Execute trade
-        self._post("/trade/place_order", order_data)
-        # Log concise trade details
-        sl_text = f" | SL: {sl_pct}%" if sl_pct else ""
-        logging.info(
-            f"✅ {action} {side.upper()} {qty:.4f} BTC @ ${price:,.2f}{sl_text}")
+            
+            # Set stop loss if specified
+            if sl_pct is not None:
+                sl_price = current_price * (1 - sl_pct/100) if side.lower() == 'buy' else current_price * (1 + sl_pct/100)
+                self._post("/trade/place_order", {
+                    "symbol": symbol,
+                    "qty": str(size),
+                    "side": 'SELL' if side.upper() == 'BUY' else 'BUY',
+                    "tradeSide": "OPEN",
+                    "orderType": "STOP_MARKET",
+                    "stopPrice": str(sl_price),
+                    "marginCoin": "USDT",
+                })
+            
+            # Set take profit if specified
+            if tp_pct is not None:
+                tp_price = current_price * (1 + tp_pct/100) if side.lower() == 'buy' else current_price * (1 - tp_pct/100)
+                self._post("/trade/place_order", {
+                    "symbol": symbol,
+                    "qty": str(size),
+                    "side": 'SELL' if side.upper() == 'BUY' else 'BUY',
+                    "tradeSide": "OPEN",
+                    "orderType": "TAKE_PROFIT_MARKET",
+                    "stopPrice": str(tp_price),
+                    "marginCoin": "USDT",
+                })
+            
+            # Log the trade
+            trade = {
+                'symbol': symbol,
+                'side': side.upper(),
+                'size': size,
+                'price': current_price,
+                'timestamp': int(time.time() * 1000),
+                'type': 'OPEN',
+                'pnl': 0,
+                'balance': self.get_account_balance('USDT')
+            }
+            
+            if self.risk_manager:
+                self.risk_manager.update_trade_history(trade)
+            
+            logging.info(f"✅ Opened {side.upper()} {size:.4f} {symbol} @ ${current_price:,.2f}")
+            return order
+            
+        except Exception as e:
+            logging.error(f"❌ Error opening position: {e}")
+            raise
 
+    def close_position(self, position: Position, reason: str = "manual") -> Dict:
+        """Close an open position with PnL tracking"""
+        try:
+            side = 'SELL' if position.side == 'BUY' else 'BUY'
+            current_price = self.get_current_price(position.symbol)
+            
+            # Place the order
+            order = self._post("/trade/place_order", {
+                "symbol": position.symbol,
+                "qty": str(position.size),
+                "side": side,
+                "tradeSide": "CLOSE",
+                "orderType": "MARKET",
+                "marginCoin": "USDT",
+            })
+            
+            # Calculate PnL
+            pnl = (current_price - position.entry_price) * position.size
+            if position.side == 'SELL':
+                pnl = -pnl
+            
+            # Log the trade
+            trade = {
+                'symbol': position.symbol,
+                'side': f'CLOSE_{position.side}',
+                'size': position.size,
+                'price': current_price,
+                'entry_price': position.entry_price,
+                'timestamp': int(time.time() * 1000),
+                'type': 'CLOSE',
+                'pnl': pnl,
+                'balance': self.get_account_balance('USDT') + pnl,
+                'reason': reason
+            }
+            
+            if self.risk_manager:
+                self.risk_manager.update_trade_history(trade)
+            
+            logging.info(f"✅ Closed {position.side} {position.size:.4f} {position.symbol} @ "
+                       f"${current_price:,.2f} | PnL: ${pnl:,.2f} ({reason})")
+            return order
+            
+        except Exception as e:
+            logging.error(f"❌ Error closing position: {e}")
+            raise
+
+    async def monitor_positions(self):
+        """Monitor open positions and apply risk management rules"""
+        while True:
+            try:
+                positions = self.get_all_positions(self.symbol)
+                for position in positions:
+                    # Check if position is held too long
+                    position_age = (time.time() * 1000 - float(position.timestamp)) / (1000 * 3600)
+                    max_hold_hours = self.risk_manager.risk_params.max_hold_period_hours if self.risk_manager else 24
+                    
+                    if position_age > max_hold_hours:
+                        await self.close_position(position, reason="Max hold time reached")
+                        continue
+                        
+                    # Check if stop loss or take profit is hit
+                    current_price = self.get_current_price(position.symbol)
+                    if hasattr(position, 'stop_loss'):
+                        if (position.side == 'BUY' and current_price <= position.stop_loss) or \
+                           (position.side == 'SELL' and current_price >= position.stop_loss):
+                            await self.close_position(position, reason="Stop loss")
+                            continue
+                            
+                    if hasattr(position, 'take_profit'):
+                        if (position.side == 'BUY' and current_price >= position.take_profit) or \
+                           (position.side == 'SELL' and current_price <= position.take_profit):
+                            await self.close_position(position, reason="Take profit")
+                            continue
+                            
+                # Sleep before next check
+                await asyncio.sleep(60)  # Check every minute
+                
+            except Exception as e:
+                logging.error(f"Error in position monitoring: {e}")
+                await asyncio.sleep(60)  # Wait before retry
+    
+    async def start_monitoring(self):
+        """Start the position monitoring task"""
+        if not self._monitor_task:
+            self._monitor_task = asyncio.create_task(self.monitor_positions())
+    
+    async def close(self):
+        """Cleanup resources"""
+        if self._monitor_task:
+            self._monitor_task.cancel()
+            try:
+                await self._monitor_task
+            except asyncio.CancelledError:
+                pass
+            self._monitor_task = None
+    
     def flash_close_position(self, symbol: str):
+        """Instantly close any open position for the symbol"""
         position = self.get_pending_positions(symbol)
-        if not position:
-            logging.info("No open position to close")
-            return
-        # Calculate PnL before closing
-        current_price = self.get_current_price(symbol)
-        pnl = (current_price - position.entry_price) * position.size
-        pnl_pct = ((current_price - position.entry_price) /
-                   position.entry_price) * 100
-        # Close position
+        if position:
+            return self.close_position(position, reason="Emergency close")
+        return None
         self._post("/trade/flash_close_position",
                    {"positionId": position.positionId})
         # Log concise closing details

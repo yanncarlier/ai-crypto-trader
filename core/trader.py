@@ -3,6 +3,7 @@ import random
 import logging
 import time
 import signal
+from datetime import datetime, timedelta
 from config.settings import TradingConfig
 from exchanges.base import BaseExchange
 from ai.prompt_builder import build_prompt
@@ -154,24 +155,84 @@ class TradingBot:
         return volume_sum
 
     def _get_ai_analysis_with_timeout(self, price: float, change_pct: float,
-                                      volume_24h: float, volume_cycle: float, symbol: str):
+                                     volume_24h: float, volume_cycle: float, symbol: str):
         """Get AI analysis with timeout protection"""
         def timeout_handler(signum, frame):
             raise TimeoutError("AI analysis timeout")
+        
         original_handler = signal.signal(signal.SIGALRM, timeout_handler)
         signal.alarm(30)
+        
         try:
-            prompt = build_prompt(price, change_pct, volume_24h, volume_cycle,
-                                  self.config.CYCLE_MINUTES, symbol)
+            # Prepare mock data for the new prompt builder
+            timestamp = datetime.now()
+            minutes_elapsed = 0
+            account_balance = self._get_effective_balance()
+            equity = account_balance
+            open_positions = []
+            
+            # Mock price history (short and long term)
+            price_history_short = [{
+                'timestamp': (timestamp - timedelta(minutes=i)).isoformat(),
+                'open': price * (1 - (i * 0.001)),
+                'high': price * (1 - (i * 0.0005)),
+                'low': price * (1 - (i * 0.0015)),
+                'close': price * (1 - (i * 0.001)),
+                'volume': volume_24h * (1 - (i * 0.1))
+            } for i in range(20, 0, -1)]
+            
+            price_history_long = [{
+                'timestamp': (timestamp - timedelta(hours=i)).isoformat(),
+                'open': price * (1 - (i * 0.01)),
+                'high': price * (1 - (i * 0.005)),
+                'low': price * (1 - (i * 0.015)),
+                'close': price * (1 - (i * 0.01)),
+                'volume': volume_24h * (1 - (i * 0.05))
+            } for i in range(24, 0, -1)]
+            
+            # Mock indicators
+            indicators = {
+                'RSI': 45.2,
+                'MACD': {'hist': 0.5, 'signal': 0.4, 'macd': 0.6},
+                'EMA_20': price * 0.995,
+                'BB_upper': price * 1.02,
+                'BB_middle': price * 0.99,
+                'BB_lower': price * 0.98
+            }
+            
+            # Mock predictive signals
+            predictive_signals = {
+                'volatility': 0.02,
+                'order_book_depth_bid': 1000,
+                'order_book_depth_ask': 1200,
+                'sentiment_proxy': 'Neutral'
+            }
+            
+            # Build the prompt with all required parameters
+            prompt = build_prompt(
+                timestamp=timestamp,
+                minutes_elapsed=minutes_elapsed,
+                account_balance=account_balance,
+                equity=equity,
+                open_positions=open_positions,
+                price_history_short=price_history_short,
+                price_history_long=price_history_long,
+                indicators=indicators,
+                predictive_signals=predictive_signals,
+                symbol=symbol,
+                currency=self.config.CURRENCY
+            )
+            
             # Log the complete AI prompt being sent
             logging.info("🤖 AI PROMPT SENT:")
-            # Split prompt into lines and log each one
             prompt_lines = prompt.strip().split('\n')
             for line in prompt_lines:
                 logging.info(f"   {line}")
             logging.info("")  # Empty line for separation
+            
             outlook = send_request(prompt, self.config)
             return outlook
+            
         except TimeoutError:
             logging.warning("AI timeout - using neutral")
             return AIOutlook(interpretation="Neutral", reasons="AI timeout")

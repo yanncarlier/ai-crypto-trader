@@ -16,11 +16,23 @@ def create_config() -> TradingConfig:
         # Get FORWARD_TESTING from .env
         forward_testing = os.getenv(
             "FORWARD_TESTING", "false").lower() in ("true", "1", "yes")
+        
+        # Risk management parameters
+        max_position_size_pct = float(os.getenv("MAX_POSITION_SIZE_PCT", "10")) / 100
+        daily_loss_limit_pct = float(os.getenv("DAILY_LOSS_LIMIT_PCT", "2")) / 100
+        max_drawdown_pct = float(os.getenv("MAX_DRAWDOWN_PCT", "5")) / 100
+        max_hold_hours = int(os.getenv("MAX_HOLD_HOURS", "24"))
+        
         # Create config with all defaults from settings.py
         config = TradingConfig(
             FORWARD_TESTING=forward_testing,
             EXCHANGE="BITUNIX",  # Force Bitunix
             TEST_NET=False,  # Bitunix doesn't have testnet
+            # Risk management settings
+            MAX_POSITION_SIZE_PCT=max_position_size_pct,
+            DAILY_LOSS_LIMIT_PCT=daily_loss_limit_pct,
+            MAX_DRAWDOWN_PCT=max_drawdown_pct,
+            MAX_HOLD_HOURS=max_hold_hours,
         )
         # Validate settings
         if config.LEVERAGE < 1 or config.LEVERAGE > 125:
@@ -55,13 +67,34 @@ if __name__ == "__main__":
             api_secret = os.getenv("EXCHANGE_API_SECRET")
             if not api_key or not api_secret:
                 raise ValueError("Bitunix API keys required for live trading")
+                
             print("🚀 LIVE TRADING with Bitunix Futures")
-            exchange = BitunixFutures(api_key, api_secret)
-            # Get initial balance
+            print("⚡ Risk Management Settings:")
+            print(f"   • Max Position Size: {config.MAX_POSITION_SIZE_PCT*100:.1f}%")
+            print(f"   • Daily Loss Limit: {config.DAILY_LOSS_LIMIT_PCT*100:.1f}%")
+            print(f"   • Max Drawdown: {config.MAX_DRAWDOWN_PCT*100:.1f}%")
+            print(f"   • Max Hold Time: {config.MAX_HOLD_HOURS} hours")
+            
+            exchange = BitunixFutures(api_key, api_secret, config)
+            
+            # Start position monitoring
+            asyncio.get_event_loop().run_until_complete(exchange.start_monitoring())
+            # Get initial balance and account summary
             try:
-                live_balance = exchange.get_account_balance(config.CURRENCY)
+                account_summary = exchange.get_account_summary(config.CURRENCY, config.SYMBOL)
+                live_balance = account_summary['balance']
+                equity = account_summary['equity']
                 config.INITIAL_CAPITAL = live_balance
+                
                 print(f"💰 Balance: ${live_balance:,.2f} {config.CURRENCY}")
+                print(f"📊 Equity: ${equity:,.2f} {config.CURRENCY}")
+                
+                if 'unrealized_pnl' in account_summary:
+                    pnl = account_summary['unrealized_pnl']
+                    if pnl != 0:
+                        pnl_pct = (pnl / live_balance) * 100
+                        pnl_sign = '+' if pnl > 0 else ''
+                        print(f"   • Unrealized PnL: {pnl_sign}${abs(pnl):,.2f} ({pnl_sign}{abs(pnl_pct):.2f}%)")
             except Exception as e:
                 print(f"⚠️ Could not fetch balance: {e}")
         bot = TradingBot(config=config, exchange=exchange)
