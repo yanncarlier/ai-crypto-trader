@@ -17,9 +17,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler()
-    ]
+    handlers=[logging.StreamHandler()]
 )
 
 logger = logging.getLogger("api_test")
@@ -28,18 +26,34 @@ def test_connection():
     """Test connection to Bitunix API"""
     try:
         from exchanges.bitunix import BitunixFutures
+        from config.settings import TradingConfig
+        
+        # Create a minimal config
+        config = TradingConfig()
+        config.SYMBOL = "BTCUSDT"
         
         logger.info("Initializing Bitunix client...")
         exchange = BitunixFutures(
             api_key=os.getenv("EXCHANGE_API_KEY"),
-            api_secret=os.getenv("EXCHANGE_API_SECRET")
+            api_secret=os.getenv("EXCHANGE_API_SECRET"),
+            config=config
         )
         
         # Test public endpoints
         logger.info("Testing public endpoints...")
-        ticker = exchange.get_ticker("BTCUSDT")
-        logger.info(f"✅ Public API test successful")
-        logger.info(f"📈 BTC/USDT Ticker: {ticker}")
+        try:
+            # Test getting current price
+            price = exchange.get_current_price("BTCUSDT")
+            logger.info(f"✅ Public API test successful")
+            logger.info(f"📈 Current BTC/USDT Price: {price}")
+            
+            # Test getting ticker data
+            ticker = exchange._public_get("/market/tickers", {"symbols": "BTCUSDT"})
+            logger.info(f"✅ Ticker data: {ticker}")
+            
+        except Exception as e:
+            logger.error(f"❌ Public API test failed: {str(e)}")
+            return False
         
         # Test private endpoints if API keys are provided
         if os.getenv("EXCHANGE_API_KEY") and os.getenv("EXCHANGE_API_SECRET"):
@@ -56,9 +70,10 @@ def test_connection():
             except Exception as e:
                 logger.error(f"❌ Private API test failed: {str(e)}")
                 logger.warning("This could be due to insufficient permissions or invalid API keys")
+                return False
                 
     except ImportError as e:
-        logger.error(f"Failed to import Bitunix module: {e}")
+        logger.error(f"Failed to import required modules: {e}")
         logger.info("Make sure you're running from the project root directory")
         return False
     except Exception as e:
