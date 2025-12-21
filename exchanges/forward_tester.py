@@ -101,3 +101,17 @@ class ForwardTester(BaseExchange):
 
     def fetch_ohlcv(self, symbol: str, timeframe: str = '1m', limit: int = 15):
         return self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+        
+    async def close(self):
+        """Cleanup resources when shutting down"""
+        try:
+            # Close any open positions
+            if self.positions:
+                self.flash_close_position(self.positions[0].symbol)
+            # Close exchange connection if needed
+            if hasattr(self.exchange, 'close'):
+                await self.exchange.close()
+            logging.info("✅ Forward tester closed")
+        except Exception as e:
+            logging.error(f"Error closing forward tester: {e}")
+            raise
