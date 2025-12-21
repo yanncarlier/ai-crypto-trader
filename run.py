@@ -128,12 +128,27 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
     
-    # Run the async main function
+    # Create and run the event loop
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
     try:
-        asyncio.run(main())
+        # Run the async main function
+        loop.run_until_complete(main())
     except KeyboardInterrupt:
         print("\nBot stopped by user")
     except Exception as e:
         print(f"Unexpected error: {e}")
     finally:
+        # Clean up any running tasks
+        pending = asyncio.all_tasks(loop=loop)
+        for task in pending:
+            task.cancel()
+        
+        # Run the loop until all tasks are cancelled
+        if pending:
+            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+        
+        # Close the loop
+        loop.close()
         print("Bot stopped")
