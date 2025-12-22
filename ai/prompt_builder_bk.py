@@ -80,25 +80,10 @@ def build_prompt(
 
     # Trading rules from config with fallback values
     # Convert percentage to decimal
-    max_pos_size_pct = float(config.get('MAX_POSITION_SIZE_PCT', 10)) / 100
-    daily_loss_pct = float(config.get('DAILY_LOSS_LIMIT_PCT', 2)) / 100
-    max_drawdown_pct = float(config.get('MAX_DRAWDOWN_PCT', 5)) / 100
-    max_hold_hours = int(config.get('MAX_HOLD_HOURS', 24))
-
-    rules_recap = f"""
-Trading Rules Recap:
-- Max position size: {max_pos_size_pct*100:.0f}% of account equity
-- Max daily loss: {daily_loss_pct*100:.0f}% of account
-- Max drawdown: {max_drawdown_pct*100:.0f}% before stopping
-- Max hold time: {max_hold_hours} hours
-- Leverage: {leverage}x
-- Position size: {position_size}
-- Stop loss: {f'{stop_loss_pct}%' if stop_loss_pct else 'Not set'}
-- Take profit: {f'{take_profit_pct}%' if take_profit_pct else 'Not set'}
-- Taker fee: {taker_fee:.2f}%
-- Prioritize capital preservation — only take high-probability setups aligned across timeframes
-- Volume data appears simulated/placeholder — do not base primary decisions on volume trends
-"""
+    max_pos_size_pct = config.get('MAX_POSITION_SIZE_PCT', 0.1) * 100
+    daily_loss_pct = config.get('DAILY_LOSS_LIMIT_PCT', 0.02) * 100
+    max_drawdown_pct = config.get('MAX_DRAWDOWN_PCT', 0.05) * 100
+    max_hold_hours = config.get('MAX_HOLD_HOURS', 24)
 
     return f"""
 You are a top-level professional {crypto_name} trader focused on multiplying the account while strictly safeguarding capital through disciplined risk management.
@@ -125,25 +110,37 @@ Technical Indicators:
 Predictive Signals:
 - Volatility: {predictive_signals.get('volatility', 'N/A')}
 - Order Book Depth: bid {predictive_signals.get('order_book_depth_bid', 'N/A')} {currency}, ask {predictive_signals.get('order_book_depth_ask', 'N/A')} {currency}
-- Sentiment: {predictive_signals.get('sentiment_proxy', 'Neutral')}
+- Sentiment: {predictive_signals.get('sentiment_proxy', 'Neutral')}  (you may override this with real-time data if using tools)
 
-{rules_recap}
+
+Trading Rules (strictly follow):
+- Max risk per trade: 1% of equity
+- Max position size: {max_pos_size_pct*100:.0f}% of equity (at entry, including leverage)
+- Max daily loss: {daily_loss_pct*100:.0f}% of starting daily equity (stop trading if hit)
+- Max drawdown: {max_drawdown_pct*100:.0f}% from peak equity (stop trading if hit)
+- Leverage: {leverage}x
+- Default stop loss: 0.8% from entry price
+- Default take profit: 2.0% from entry price (R:R ≈ 2.5:1 after fees)
+- Taker fee: {taker_fee:.2f}%
+- Max hold time per trade: {max_hold_hours} hours
+- Prioritize capital preservation — only take high-probability setups aligned across timeframes
+- Volume data appears simulated/placeholder — do not base primary decisions on volume trends
 
 
 Task:
 Analyze the current market across multiple timeframes. Identify short-term signals from the {short_tf} chart that align with the longer-term trend from the {long_tf} chart.
 Consider technical indicators, price action, order book imbalance, volatility, and sentiment.
-If using tools (e.g., web/X search), feel free to fetch real-time sentiment or news for Bitcoin.
+If using tools (e.g., web/X search), feel free to fetch real-time sentiment or news for {crypto_name}.
 
 Respond with valid JSON only — no markdown, no extra text, no explanations outside the JSON:
 {{
-    "interpretation": "Strong Bullish" | "Bullish" | "Neutral" | "Bearish" | "Strong Bearish",
-    "confidence": 0.0 to 1.0,
-    "reasons": "Concise reasoning (max 120 words): timeframe alignment, key indicators, price action, risk considerations.",
-    "action": "BUY" | "SELL" | "CLOSE_POSITION" | "HOLD" | "NO_TRADE",
-    "size_percent_of_equity": 0.0 to  {min(100.0, max_pos_size_pct*100):.1f}  (0.0 if no new trade; suggest 0.1 –  {min(100.0, max_pos_size_pct*100):.1f}  only on high-confidence aligned setups),
-    "stop_loss_price": null 
-    "take_profit_price": null 
-    "additional_notes": "Brief notes: trailing stop ideas, alerts, or key levels to watch."
+  "interpretation": "Strong Bullish" | "Bullish" | "Neutral" | "Bearish" | "Strong Bearish",
+  "confidence": 0.0 to 1.0,
+  "reasons": "Concise reasoning (max 120 words): timeframe alignment, key indicators, price action, risk considerations.",
+  "action": "BUY" | "SELL" | "CLOSE_POSITION" | "HOLD" | "NO_TRADE",
+  "size_percent_of_equity": 0.0 to {max_pos_size_pct*100:.1f} (0.0 if no new trade; suggest 0.1–{max_pos_size_pct*100:.1f} only on high-confidence aligned setups),
+  "stop_loss_price": null | float (use ~0.8% from entry if suggesting trade),
+  "take_profit_price": null | float (use ~2.0% from entry if suggesting trade),
+  "additional_notes": "Brief notes: trailing stop ideas, alerts, or key levels to watch."
 }}
 """.strip()
