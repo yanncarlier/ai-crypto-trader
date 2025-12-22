@@ -2,7 +2,7 @@
 from typing import Union, Dict, Any
 from .base import BaseExchange, Position
 from .bitunix import BitunixFutures
-from .forward_tester import ForwardTester
+# from .forward_tester import ForwardTester
 import logging
 
 __all__ = ['BaseExchange', 'BitunixFutures', 'ForwardTester', 'Position']

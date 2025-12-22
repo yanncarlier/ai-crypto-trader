@@ -105,8 +105,10 @@ async def main():
         print(f"Cycle: {config['CYCLE_MINUTES']} minutes")
         
         if config['FORWARD_TESTING']:
-            print("Running in PAPER TRADING mode")
-            exchange = ForwardTester(config)
+            print("Running in PAPER TRADING mode (using live exchange dummy)")
+            api_key = config['EXCHANGE_API_KEY']
+            api_secret = config['EXCHANGE_API_SECRET']
+            exchange = BitunixFutures(api_key, api_secret, config)
         else:
             # Live trading with Bitunix
             api_key = config['EXCHANGE_API_KEY']
