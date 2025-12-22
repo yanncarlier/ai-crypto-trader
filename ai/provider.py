@@ -87,14 +87,14 @@ async def send_request(prompt: str, config: Dict[str, Any], api_key: Optional[st
                 interp = "Neutral"
             return AIOutlook(interpretation=interp, reasons=content[:200])
     except Exception as e:
-        logging.warning(f"AI error: {e}")
+        logging.getLogger('ai').warning(f"AI error: {e}")
         return AIOutlook(interpretation="Neutral", reasons=f"Error: {e}")
 
 
 def save_response(outlook: AIOutlook, run_name: str) -> None:
     """Save AI response to console only (no file saving)"""
     try:
-        logging.info(f"🤖 AI Response: {outlook.interpretation}")
-        logging.info(f"   Reasons: {outlook.reasons[:200]}")
+        logging.getLogger('ai').info(f"🤖 AI Response: {outlook.interpretation}")
+        logging.getLogger('ai').info(f"   Reasons: {outlook.reasons[:200]}")
     except Exception:
         pass

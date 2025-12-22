@@ -27,7 +27,7 @@ class TradingBot:
         mode = "PAPER" if config['FORWARD_TESTING'] else "LIVE"
         logging.info(
             f"{mode} | {config['SYMBOL']} | {config['CYCLE_MINUTES']}min | {config['LEVERAGE']}x")
-        logging.info(f"AI: {config['LLM_PROVIDER']} ({config['LLM_MODEL']})")
+        logging.getLogger('ai').info(f"AI: {config['LLM_PROVIDER']} ({config['LLM_MODEL']})")
 
     async def _get_effective_balance(self) -> float:
         """Get the current balance (live or paper)"""
@@ -225,11 +225,11 @@ class TradingBot:
                 )
 
                 # Log the complete AI prompt being sent
-                logging.info("AI PROMPT SENT:")
+                logging.getLogger('ai').info("AI PROMPT SENT:")
                 prompt_lines = prompt.strip().split('\n')
                 for line in prompt_lines:
-                    logging.info(f"   {line}")
-                logging.info("")  # Empty line for separation
+                    logging.getLogger('ai').info(f"   {line}")
+                logging.getLogger('ai').info("")  # Empty line for separation
 
                 outlook = await send_request(prompt, self.config)
                 return outlook
@@ -237,10 +237,10 @@ class TradingBot:
             return await asyncio.wait_for(get_analysis(), timeout=30)
 
         except asyncio.TimeoutError:
-            logging.warning("AI timeout - using neutral")
+            logging.getLogger('ai').warning("AI timeout - using neutral")
             return AIOutlook(interpretation="Neutral", reasons="AI timeout")
         except Exception as e:
-            logging.warning(f"AI error: {e}")
+            logging.getLogger('ai').warning(f"AI error: {e}")
             return AIOutlook(interpretation="Neutral", reasons=f"AI error: {e}")
 
     def _calculate_position_value(self, balance: float) -> float:
