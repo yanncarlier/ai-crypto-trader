@@ -48,7 +48,7 @@ def get_config() -> Dict[str, Any]:
             'CRYPTO': 'Bitcoin',
             'SYMBOL': get_env_str('SYMBOL', 'BTCUSDT'),
             'CURRENCY': get_env_str('CURRENCY', 'USDT'),
-            'CYCLE_MINUTES': get_env_int('CYCLE_MINUTES', 10),
+            'CYCLE_MINUTES': get_env_float('CYCLE_MINUTES', 10.0),
             'LEVERAGE': get_env_int('LEVERAGE', 2),
             'MARGIN_MODE': get_env_str('MARGIN_MODE', 'ISOLATED'),
             'POSITION_SIZE': get_env_str('POSITION_SIZE', '10%'),
@@ -68,7 +68,7 @@ def get_config() -> Dict[str, Any]:
             'LLM_PROVIDER': get_env_str('LLM_PROVIDER', 'deepseek'),
             'LLM_MODEL': get_env_str('LLM_MODEL', 'default'),
             'LLM_TEMPERATURE': get_env_float('LLM_TEMPERATURE', 0.2),
-            'LLM_MAX_TOKENS': get_env_int('LLM_MAX_TOKENS', 800),
+            'LLM_MAX_TOKENS': get_env_int('LLM_MAX_TOKENS', 1500),
             'EXCHANGE': get_env_str('EXCHANGE', 'BITUNIX'),
             'TEST_NET': get_env_bool('TEST_NET', False),
             'EXCHANGE_API_KEY': get_env_str('EXCHANGE_API_KEY', ''),
@@ -102,7 +102,7 @@ async def main():
         print(f"Bitunix Futures Trader | {mode} | {config['LLM_PROVIDER']}")
         print(f"Symbol: {config['SYMBOL']} | Leverage: {config['LEVERAGE']}x")
         print(f"Position: {config['POSITION_SIZE']} | Stop Loss: {config['STOP_LOSS_PERCENT']}%")
-        print(f"Cycle: {config['CYCLE_MINUTES']} minutes")
+        print(f"Cycle: {config['CYCLE_MINUTES']:.1f} minutes")
         
         if config['FORWARD_TESTING']:
             print("Running in PAPER TRADING mode (using live exchange dummy)")
@@ -153,7 +153,7 @@ async def main():
         
         while True:
             await bot.run_cycle()
-            print(f"--- Cycle finished, waiting {config['CYCLE_MINUTES']} minutes ---")
+            print(f"--- Cycle finished, waiting {config['CYCLE_MINUTES']:.1f} minutes ---")
             await asyncio.sleep(config['CYCLE_MINUTES'] * 60)
 
     except Exception as e:

@@ -136,7 +136,7 @@ Respond with valid JSON only — no markdown, no extra text, no explanations out
 {{
   "interpretation": "Strong Bullish" | "Bullish" | "Neutral" | "Bearish" | "Strong Bearish",
   "confidence": 0.0 to 1.0,
-  "reasons": "Concise reasoning (max 120 words): timeframe alignment, key indicators, price action, risk considerations.",
+  "reasons": "Concise reasoning: timeframe alignment, key indicators, price action.",
   "action": "BUY" | "SELL" | "CLOSE_POSITION" | "HOLD" | "NO_TRADE",
   "size_percent_of_equity": 0.0 to {max_pos_size_pct*100:.1f} (0.0 if no new trade; suggest 0.1–{max_pos_size_pct*100:.1f} only on high-confidence aligned setups),
   "stop_loss_price": null | float (use ~0.8% from entry if suggesting trade),

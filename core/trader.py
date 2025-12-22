@@ -47,7 +47,7 @@ class TradingBot:
     @retry(stop=stop_after_attempt(2), wait=wait_fixed(3))
     async def _get_market_data(self, symbol: str):
         """Get market data including cycle-specific volume"""
-        cycle_minutes = self.config['CYCLE_MINUTES']
+        cycle_minutes = int(self.config['CYCLE_MINUTES'])
         if self.config['FORWARD_TESTING']:
             price = await self.exchange.get_current_price(symbol)
             change_pct = random.uniform(-2.5, 2.5)
@@ -237,7 +237,7 @@ class TradingBot:
                 outlook = await send_request(prompt, self.config)
                 return outlook
 
-            return await asyncio.wait_for(get_analysis(), timeout=30)
+            return await asyncio.wait_for(get_analysis(), timeout=60)
 
         except asyncio.TimeoutError:
             logging.getLogger('ai').warning("AI timeout - using neutral")

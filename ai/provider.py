@@ -49,8 +49,8 @@ async def send_request(prompt: str, config: Dict[str, Any], api_key: Optional[st
     if model == "default":
         model = PROVIDER_CONFIG[provider]["default_model"]
 
-    temperature = config.get('LLM_TEMPERATURE', 0.2)
-    max_tokens = config.get('LLM_MAX_TOKENS', 1200)
+    temperature = config.get('LLM_TEMPERATURE', 0.3)
+    max_tokens = config.get('LLM_MAX_TOKENS', 2000)
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}"
@@ -67,6 +67,7 @@ async def send_request(prompt: str, config: Dict[str, Any], api_key: Optional[st
             r.raise_for_status()
         data = r.json()
         content = data["choices"][0]["message"]["content"].strip()
+        logging.getLogger('ai').info(f"Raw AI content: {content}")
         # Try to parse JSON
         if content.startswith("```"):
             content = content.split("```", 2)[1]
