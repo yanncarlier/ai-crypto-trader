@@ -22,15 +22,36 @@ logging.basicConfig(
 
 logger = logging.getLogger("api_test")
 
-def test_connection():
+import asyncio
+
+...
+
+async def test_connection():
     """Test connection to Bitunix API"""
     try:
         from exchanges.bitunix import BitunixFutures
-        from config.settings import TradingConfig
         
-        # Create a minimal config
-        config = TradingConfig()
-        config.SYMBOL = "BTCUSDT"
+        # Helper function to safely parse percentage values
+        def parse_percentage(value: str, default: float) -> float:
+            if not value:
+                return default
+            # Remove any percentage signs and convert to float
+            return float(str(value).replace('%', '').strip()) / 100.0
+            
+        # Create a minimal config dictionary
+        config = {
+            'SYMBOL': os.getenv("SYMBOL", "BTCUSDT"),
+            'CURRENCY': os.getenv("CURRENCY", "USDT"),
+            'CRYPTO': os.getenv("CRYPTO", "BTC"),
+            'LEVERAGE': int(os.getenv("LEVERAGE", "2")),
+            'POSITION_SIZE': parse_percentage(os.getenv("POSITION_SIZE"), 0.1),
+            'STOP_LOSS_PERCENT': parse_percentage(os.getenv("STOP_LOSS_PERCENT"), 0.1),
+            'TAKE_PROFIT_PERCENT': parse_percentage(os.getenv("TAKE_PROFIT_PERCENT"), 0.0),
+            'TAKER_FEE': float(os.getenv("TAKER_FEE", "0.0006")),
+            'INITIAL_CAPITAL': float(os.getenv("INITIAL_CAPITAL", "10000.0")),
+            'RUN_NAME': os.getenv("RUN_NAME", "test-run"),
+            'FORWARD_TESTING': False
+        }
         
         logger.info("Initializing Bitunix client...")
         exchange = BitunixFutures(
@@ -43,12 +64,12 @@ def test_connection():
         logger.info("Testing public endpoints...")
         try:
             # Test getting current price
-            price = exchange.get_current_price("BTCUSDT")
+            price = await exchange.get_current_price("BTCUSDT")
             logger.info(f"✅ Public API test successful")
             logger.info(f"📈 Current BTC/USDT Price: {price}")
             
             # Test getting ticker data
-            ticker = exchange._public_get("/market/tickers", {"symbols": "BTCUSDT"})
+            ticker = await exchange._public_get("/market/tickers", {"symbols": "BTCUSDT"})
             logger.info(f"✅ Ticker data: {ticker}")
             
         except Exception as e:
@@ -59,12 +80,12 @@ def test_connection():
         if os.getenv("EXCHANGE_API_KEY") and os.getenv("EXCHANGE_API_SECRET"):
             logger.info("Testing private endpoints...")
             try:
-                balance = exchange.get_account_balance("USDT")
+                balance = await exchange.get_account_balance("USDT")
                 logger.info(f"✅ Private API test successful")
                 logger.info(f"💰 USDT Balance: {balance}")
                 
                 # Test fetching open positions
-                positions = exchange.get_pending_positions("BTCUSDT")
+                positions = await exchange.get_pending_positions("BTCUSDT")
                 logger.info(f"📊 Open positions: {positions if positions else 'None'}")
                 
             except Exception as e:
@@ -96,7 +117,7 @@ if __name__ == "__main__":
         logger.info("Testing only public endpoints...")
     
     # Run the test
-    success = test_connection()
+    success = asyncio.run(test_connection())
     
     if success:
         logger.info("✅ All tests completed successfully!")

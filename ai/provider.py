@@ -3,10 +3,10 @@ import os
 import json
 import logging
 from datetime import datetime
-from typing import Literal
-import requests
+from typing import Literal, Dict, Any, Optional
+import httpx
 from pydantic import BaseModel, Field
-from config.settings import TradingConfig
+
 # Provider configuration
 PROVIDER_CONFIG = {
     "xai": {"url": "https://api.x.ai/v1/chat/completions", "default_model": "grok-2-1212"},
@@ -23,22 +23,35 @@ class AIOutlook(BaseModel):
     reasons: str = Field(min_length=1)
 
 
-def send_request(prompt: str, config: TradingConfig, api_key: str | None = None) -> AIOutlook:
-    """Send request to AI provider using config for settings"""
-    api_key = api_key or os.getenv("LLM_API_KEY")
+import httpx
+
+...
+
+async def send_request(prompt: str, config: Dict[str, Any], api_key: Optional[str] = None) -> AIOutlook:
+    """Send request to AI provider using config for settings
+    
+    Args:
+        prompt: The prompt to send to the AI
+        config: Configuration dictionary with LLM settings
+        api_key: Optional API key (if not in config)
+    """
+    api_key = api_key or os.getenv("LLM_API_KEY") or config.get('LLM_API_KEY')
     if not api_key:
         return AIOutlook(interpretation="Neutral", reasons="No API key")
-    provider = config.LLM_PROVIDER.lower()
+        
+    provider = config.get('LLM_PROVIDER', 'deepseek').lower()
     if provider not in PROVIDER_CONFIG:
         raise ValueError(f"Unknown LLM_PROVIDER={provider}")
+        
     url = PROVIDER_CONFIG[provider]["url"]
+    
     # Use model from config, or provider default if "default"
-    if config.LLM_MODEL == "default":
+    model = config.get('LLM_MODEL', 'default')
+    if model == "default":
         model = PROVIDER_CONFIG[provider]["default_model"]
-    else:
-        model = config.LLM_MODEL
-    temperature = config.LLM_TEMPERATURE
-    max_tokens = config.LLM_MAX_TOKENS
+        
+    temperature = config.get('LLM_TEMPERATURE', 0.2)
+    max_tokens = config.get('LLM_MAX_TOKENS', 800)
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}"
@@ -50,8 +63,9 @@ def send_request(prompt: str, config: TradingConfig, api_key: str | None = None)
         "messages": [{"role": "user", "content": prompt}],
     }
     try:
-        r = requests.post(url, headers=headers, json=payload, timeout=45)
-        r.raise_for_status()
+        async with httpx.AsyncClient() as client:
+            r = await client.post(url, headers=headers, json=payload, timeout=45)
+            r.raise_for_status()
         data = r.json()
         content = data["choices"][0]["message"]["content"].strip()
         # Try to parse JSON

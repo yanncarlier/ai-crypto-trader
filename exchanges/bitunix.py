@@ -4,11 +4,10 @@ import hashlib
 import time
 import secrets
 import logging
-from typing import Optional, Dict, Any, List, Tuple
-import requests
 import asyncio
-import time
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from typing import Optional, Dict, Any, List, Tuple
+import httpx
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, RetryError
 from exchanges.base import BaseExchange, Position
 from utils.risk_manager import RiskManager
 API_URL = "https://fapi.bitunix.com/api/v1/futures"
@@ -38,103 +37,124 @@ class BitunixAuth:
 
 
 class BitunixFutures(BaseExchange):
-    def __init__(self, api_key: str, api_secret: str, config=None):
+    def __init__(self, api_key: str, api_secret: str, config: Optional[Dict[str, Any]] = None):
+        """Initialize Bitunix Futures exchange client.
+        
+        Args:
+            api_key: Exchange API key
+            api_secret: Exchange API secret
+            config: Configuration dictionary (optional)
+        """
         self.auth = BitunixAuth(api_key, api_secret)
-        self.config = config
+        self.config = config or {}
         self.last_request_time = 0
         self.min_request_interval = 0.1
-        self.symbol = config.SYMBOL if config else "BTCUSDT"
-        self.risk_manager = RiskManager(config, self) if config else None
+        self.symbol = self.config.get('SYMBOL', 'BTCUSDT')
+        self.risk_manager = RiskManager(self.config, self) if self.config else None
         self._monitor_task = None
 
-    def _rate_limit(self):
-        elapsed = time.time() - self.last_request_time
-        if elapsed < self.min_request_interval:
-            time.sleep(self.min_request_interval - elapsed)
-        self.last_request_time = time.time()
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    async def _public_get(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Any:
+        async with httpx.AsyncClient() as client:
+            url = f"{API_URL}{endpoint}"
+            response = await client.get(url, params=params, timeout=TIMEOUT)
+            response.raise_for_status()
+            result = response.json()
+            if result.get("code") != 0:
+                raise Exception(
+                    f"API Error {result.get('code')}: {result.get('msg')}")
+            return result["data"]
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
-    def _public_get(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Any:
-        self._rate_limit()
-        url = f"{API_URL}{endpoint}"
-        response = requests.get(url, params=params, timeout=TIMEOUT)
-        response.raise_for_status()
-        result = response.json()
-        if result.get("code") != 0:
-            raise Exception(
-                f"API Error {result.get('code')}: {result.get('msg')}")
-        return result["data"]
-
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
-    def _get(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Any:
-        self._rate_limit()
+    async def _get(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Any:
         url = f"{API_URL}{endpoint}"
         sorted_params = "".join(f"{k}{v}" for k, v in sorted(
             (params or {}).items())) if params else ""
         headers = self.auth.get_headers(query_params=sorted_params)
-        response = requests.get(url, headers=headers,
-                                params=params, timeout=TIMEOUT)
-        response.raise_for_status()
-        data = response.json()
-        if data.get("code") != 0:
-            raise Exception(f"API Error {data.get('code')}: {data.get('msg')}")
-        return data["data"]
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers=headers,
+                                    params=params, timeout=TIMEOUT)
+            response.raise_for_status()
+            data = response.json()
+            if data.get("code") != 0:
+                logging.warning(f"Private GET API Error - Endpoint: {endpoint}, Params: {params}, Response: {data}")
+                raise Exception(f"API Error {data.get('code')}: {data.get('msg')}")
+            return data["data"]
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
-    def _post(self, endpoint: str, data: Dict[str, Any]) -> Any:
-        self._rate_limit()
+    async def _post(self, endpoint: str, data: Dict[str, Any]) -> Any:
         url = f"{API_URL}{endpoint}"
         payload = json.dumps(data, separators=(",", ":"))
         headers = self.auth.get_headers(body=payload)
-        response = requests.post(url, headers=headers,
-                                 data=payload, timeout=TIMEOUT)
-        response.raise_for_status()
-        result = response.json()
-        if result.get("code") != 0:
-            raise Exception(
-                f"API Error {result.get('code')}: {result.get('msg')}")
-        return result["data"]
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, headers=headers,
+                                     content=payload, timeout=TIMEOUT)
+            response.raise_for_status()
+            result = response.json()
+            if result.get("code") != 0:
+                logging.warning(f"Private POST API Error - Endpoint: {endpoint}, Data: {data}, Response: {result}")
+                raise Exception(
+                    f"API Error {result.get('code')}: {result.get('msg')}")
+            return result["data"]
 
-    def get_current_price(self, symbol: str) -> float:
-        data = self._public_get("/market/tickers", {"symbols": symbol})
+    async def get_current_price(self, symbol: str) -> float:
+        data = await self._public_get("/market/tickers", {"symbols": symbol})
         for t in data:
             if t["symbol"] == symbol:
                 price = float(t["lastPrice"])
                 return price
         raise ValueError(f"Price not found for {symbol}")
 
-    def get_account_balance(self, currency: str) -> float:
-        """Get total account balance in USDT (including BTC converted to USDT)"""
+    async def _get_margin_balance(self, margin_coin: str) -> Tuple[float, float]:
+        """Fetches available and total balance for a given margin coin."""
         try:
-            # Get USDT balance
-            data_usdt = self._get("/account", {"marginCoin": "USDT"})
-            usdt_balance = float(data_usdt.get("available") or 0.0)
-            total_usdt = float(data_usdt.get("total") or 0.0)
-            # Get BTC balance
-            data_btc = self._get("/account", {"marginCoin": "BTC"})
-            btc_balance = float(data_btc.get("available") or 0.0)
-            total_btc = float(data_btc.get("total") or 0.0)
-            # Get current BTC price to convert to USDT
-            btc_price = self.get_current_price("BTCUSDT")
-            btc_in_usdt = btc_balance * btc_price
-            total_btc_in_usdt = total_btc * btc_price
-            # Total available balance = USDT + BTC converted to USDT
-            total_available = usdt_balance + btc_in_usdt
-            total_equity = total_usdt + total_btc_in_usdt
-            # Log concise balance summary
-            if btc_balance > 0:
-                logging.info(
-                    f"💰 Balance: ${total_available:,.2f} (${usdt_balance:,.2f} USDT + {btc_balance:.6f} BTC)")
-            else:
-                logging.info(f"💰 Balance: ${total_available:,.2f} USDT")
-            return total_available  # Return total available in USDT
+            data = await self._get("/account", {"marginCoin": margin_coin})
+            available = float(data.get("available") or 0.0)
+            total = float(data.get("total") or 0.0)
+            return available, total
+        except RetryError as e:
+            logging.warning(
+                f"Failed to fetch {margin_coin} balance after multiple retries: {e}")
         except Exception as e:
-            logging.error(f"❌ Failed to fetch balance: {e}")
-            return 0.0
+            # This will catch other exceptions, including API errors
+            logging.warning(f"Could not fetch {margin_coin} balance: {e}")
+        return 0.0, 0.0
 
-    def get_pending_positions(self, symbol: str) -> Optional[Position]:
+    async def get_account_balance(self, currency: str) -> float:
+        """Get total account balance in USDT (including other assets converted to USDT)"""
+        # Fetch USDT balance
+        usdt_balance, total_usdt = await self._get_margin_balance("USDT")
+        # Fetch BTC balance
+        btc_balance, total_btc = await self._get_margin_balance("BTC")
+
+        # Safely get current BTC price
         try:
-            data = self._get("/position/get_pending_positions",
+            btc_price = await self.get_current_price("BTCUSDT")
+        except Exception as e:
+            logging.error(f"❌ Failed to fetch BTC price: {e}")
+            logging.warning(
+                f"💰 Balance: ${usdt_balance:,.2f} USDT (BTC not included)")
+            return usdt_balance
+
+        # Calculate total values
+        btc_in_usdt = btc_balance * btc_price
+        total_btc_in_usdt = total_btc * btc_price
+        total_available = usdt_balance + btc_in_usdt
+        total_equity = total_usdt + total_btc_in_usdt
+
+        # Log concise balance summary
+        if btc_balance > 0:
+            logging.info(
+                f"💰 Balance: ${total_available:,.2f} (${usdt_balance:,.2f} USDT + {btc_balance:.6f} BTC)")
+        else:
+            logging.info(f"💰 Balance: ${total_available:,.2f} USDT")
+
+        # Return total available balance in USDT
+        return total_available
+
+    async def get_pending_positions(self, symbol: str) -> Optional[Position]:
+        try:
+            data = await self._get("/position/get_pending_positions",
                              {"symbol": symbol})
             if not data:
                 return None
@@ -147,15 +167,16 @@ class BitunixFutures(BaseExchange):
                         size=abs(float(pos["qty"])),
                         entry_price=float(pos["avgOpenPrice"]),
                         symbol=symbol,
+                        timestamp=int(pos["cTime"]),
                     )
         except Exception as e:
             logging.warning(f"Failed to fetch positions: {e}")
         return None
 
-    def get_all_positions(self, symbol: str) -> List[Position]:
+    async def get_all_positions(self, symbol: str) -> List[Position]:
         """Get all positions for the symbol (should only be one for futures)"""
         try:
-            data = self._get("/position/get_pending_positions",
+            data = await self._get("/position/get_pending_positions",
                              {"symbol": symbol})
             positions = []
             for pos in data:
@@ -167,17 +188,18 @@ class BitunixFutures(BaseExchange):
                         size=abs(float(pos["qty"])),
                         entry_price=float(pos["avgOpenPrice"]),
                         symbol=symbol,
+                        timestamp=int(pos["cTime"]),
                     ))
             return positions
         except Exception as e:
             logging.warning(f"Failed to fetch all positions: {e}")
             return []
 
-    def get_account_summary(self, currency: str, symbol: str) -> Dict[str, Any]:
+    async def get_account_summary(self, currency: str, symbol: str) -> Dict[str, Any]:
         """Get complete account summary including balance and positions"""
-        balance = self.get_account_balance(currency)
-        positions = self.get_all_positions(symbol)
-        current_price = self.get_current_price(symbol)
+        balance = await self.get_account_balance(currency)
+        positions = await self.get_all_positions(symbol)
+        current_price = await self.get_current_price(symbol)
         
         summary = {
             "balance": balance,
@@ -206,119 +228,113 @@ class BitunixFutures(BaseExchange):
             
         return summary
 
-    def set_leverage(self, symbol: str, leverage: int):
-        self._post("/account/change_leverage",
+    async def set_leverage(self, symbol: str, leverage: int):
+        await self._post("/account/change_leverage",
                    {"symbol": symbol, "leverage": leverage, "marginCoin": "USDT"})
 
-    def set_margin_mode(self, symbol: str, mode: str):
+    async def set_margin_mode(self, symbol: str, mode: str):
         mode_str = "ISOLATION" if mode.upper() == "ISOLATED" else "CROSS"
-        self._post("/account/change_margin_mode",
+        await self._post("/account/change_margin_mode",
                    {"symbol": symbol, "marginMode": mode_str, "marginCoin": "USDT"})
 
-    async def open_position(self, symbol: str, side: str, size: str, 
-                          sl_pct: Optional[float] = None, 
+    async def open_position(self, symbol: str, side: str, size: str,
+                          sl_pct: Optional[float] = None,
                           tp_pct: Optional[float] = None) -> Dict:
         """Open a new position with risk management"""
         try:
-            # Check risk limits before opening position
+            current_price = await self.get_current_price(symbol)
+
+            # Determine position size
+            if isinstance(size, str) and '%' in size:
+                size_pct = float(size.strip('%')) / 100
+                balance = await self.get_account_balance('USDT')
+                position_size = (balance * size_pct) / current_price
+            else:
+                position_size = float(size)
+
+            # Apply risk management
             if self.risk_manager:
                 can_trade, reason = await self.risk_manager.check_risk_limits(symbol)
                 if not can_trade:
                     raise ValueError(f"Risk limit reached: {reason}")
-            
-            # Get current price for position sizing
-            current_price = self.get_current_price(symbol)
-            
-            # Calculate position size with risk management
-            if self.risk_manager:
-                position_size, risk_metrics = await self.risk_manager.calculate_position_size(symbol, current_price)
-                max_position_value = risk_metrics.get('max_position_value', float('inf'))
                 
-                # Convert size to float if it's a percentage
-                if isinstance(size, str) and '%' in size:
-                    size_pct = float(size.strip('%')) / 100
-                    balance = self.get_account_balance('USDT')
-                    size = (balance * size_pct) / current_price
-                else:
-                    size = float(size)
-                
-                # Apply position size limits
-                size = min(size, max_position_value / current_price)
-            else:
-                # Fallback to simple position sizing
-                if isinstance(size, str) and '%' in size:
-                    size_pct = float(size.strip('%')) / 100
-                    balance = self.get_account_balance('USDT')
-                    size = (balance * size_pct) / current_price
-                else:
-                    size = float(size)
-            
-            # Place the order
-            order = self._post("/trade/place_order", {
+                # Adjust position size based on risk manager output
+                position_size, _ = await self.risk_manager.calculate_position_size(symbol, current_price, position_size)
+
+            if position_size <= 0:
+                raise ValueError("Position size must be positive.")
+
+            # Place the main order
+            order = await self._post("/trade/place_order", {
                 "symbol": symbol,
-                "qty": str(size),
+                "qty": str(position_size),
                 "side": side.upper(),
                 "tradeSide": "OPEN",
                 "orderType": "MARKET",
                 "marginCoin": "USDT",
             })
-            
+
             # Set stop loss if specified
             if sl_pct is not None:
-                sl_price = current_price * (1 - sl_pct/100) if side.lower() == 'buy' else current_price * (1 + sl_pct/100)
-                self._post("/trade/place_order", {
+                sl_price = current_price * \
+                    (1 - sl_pct/100) if side.lower() == 'buy' else current_price * \
+                    (1 + sl_pct/100)
+                await self._post("/trade/place_order", {
                     "symbol": symbol,
-                    "qty": str(size),
+                    "qty": str(position_size),
                     "side": 'SELL' if side.upper() == 'BUY' else 'BUY',
-                    "tradeSide": "OPEN",
+                    "tradeSide": "CLOSE",  # SL orders are closing orders
                     "orderType": "STOP_MARKET",
                     "stopPrice": str(sl_price),
                     "marginCoin": "USDT",
                 })
-            
+
             # Set take profit if specified
             if tp_pct is not None:
-                tp_price = current_price * (1 + tp_pct/100) if side.lower() == 'buy' else current_price * (1 - tp_pct/100)
-                self._post("/trade/place_order", {
+                tp_price = current_price * \
+                    (1 + tp_pct/100) if side.lower() == 'buy' else current_price * \
+                    (1 - tp_pct/100)
+                await self._post("/trade/place_order", {
                     "symbol": symbol,
-                    "qty": str(size),
+                    "qty": str(position_size),
                     "side": 'SELL' if side.upper() == 'BUY' else 'BUY',
-                    "tradeSide": "OPEN",
+                    "tradeSide": "CLOSE",  # TP orders are closing orders
                     "orderType": "TAKE_PROFIT_MARKET",
                     "stopPrice": str(tp_price),
                     "marginCoin": "USDT",
                 })
-            
+
             # Log the trade
             trade = {
                 'symbol': symbol,
                 'side': side.upper(),
-                'size': size,
+                'size': position_size,
                 'price': current_price,
                 'timestamp': int(time.time() * 1000),
                 'type': 'OPEN',
                 'pnl': 0,
-                'balance': self.get_account_balance('USDT')
+                'balance': await self.get_account_balance('USDT')
             }
-            
+
             if self.risk_manager:
                 self.risk_manager.update_trade_history(trade)
-            
-            logging.info(f"✅ Opened {side.upper()} {size:.4f} {symbol} @ ${current_price:,.2f}")
+
+            logging.info(
+                f"✅ Opened {side.upper()} {position_size:.4f} {symbol} @ ${current_price:,.2f}")
             return order
-            
+
         except Exception as e:
             logging.error(f"❌ Error opening position: {e}")
             raise
 
-    def close_position(self, position: Position, reason: str = "manual") -> Dict:
+    async def close_position(self, position: Position, reason: str = "manual") -> Dict:
         """Close an open position with PnL tracking"""
         try:
             side = 'SELL' if position.side == 'BUY' else 'BUY'
-            current_price = self.get_current_price(position.symbol)
+            current_price = await self.get_current_price(position.symbol)
             
             # Place the order
-            order = self._post("/trade/place_order", {
+            order = await self._post("/trade/place_order", {
                 "symbol": position.symbol,
                 "qty": str(position.size),
                 "side": side,
@@ -342,7 +358,7 @@ class BitunixFutures(BaseExchange):
                 'timestamp': int(time.time() * 1000),
                 'type': 'CLOSE',
                 'pnl': pnl,
-                'balance': self.get_account_balance('USDT') + pnl,
+                'balance': await self.get_account_balance('USDT') + pnl,
                 'reason': reason
             }
             
@@ -361,10 +377,10 @@ class BitunixFutures(BaseExchange):
         """Monitor open positions and apply risk management rules"""
         while True:
             try:
-                positions = self.get_all_positions(self.symbol)
+                positions = await self.get_all_positions(self.symbol)
                 for position in positions:
                     # Check if position is held too long
-                    position_age = (time.time() * 1000 - float(position.timestamp)) / (1000 * 3600)
+                    position_age = (time.time() * 1000 - position.timestamp) / (1000 * 3600)
                     max_hold_hours = self.risk_manager.risk_params.max_hold_period_hours if self.risk_manager else 24
                     
                     if position_age > max_hold_hours:
@@ -372,7 +388,7 @@ class BitunixFutures(BaseExchange):
                         continue
                         
                     # Check if stop loss or take profit is hit
-                    current_price = self.get_current_price(position.symbol)
+                    current_price = await self.get_current_price(position.symbol)
                     if hasattr(position, 'stop_loss'):
                         if (position.side == 'BUY' and current_price <= position.stop_loss) or \
                            (position.side == 'SELL' and current_price >= position.stop_loss):
@@ -407,20 +423,29 @@ class BitunixFutures(BaseExchange):
                 pass
             self._monitor_task = None
     
-    def flash_close_position(self, symbol: str):
+    async def flash_close_position(self, symbol: str) -> None:
         """Instantly close any open position for the symbol"""
-        position = self.get_pending_positions(symbol)
+        position = await self.get_pending_positions(symbol)
         if position:
-            return self.close_position(position, reason="Emergency close")
-        return None
-        self._post("/trade/flash_close_position",
-                   {"positionId": position.positionId})
-        # Log concise closing details
-        logging.info(
-            f"🔒 Closed {position.side} {position.size:.4f} BTC | PnL: ${pnl:+.2f} ({pnl_pct:+.2f}%)")
+            # Calculate PnL before closing
+            current_price = await self.get_current_price(symbol)
+            pnl = (current_price - position.entry_price) * position.size
+            if position.side == 'SELL':
+                pnl = -pnl
+            pnl_pct = (pnl / (position.entry_price * position.size)) * 100 if (position.entry_price * position.size) != 0 else 0
 
-    def fetch_ohlcv(self, symbol: str, timeframe: str = "1m", limit: int = 15):
-        data = self._public_get(
+            # Close the position
+            await self.close_position(position, reason="Emergency close")
+
+            # Log concise closing details
+            logging.info(
+                f"🔒 Closed {position.side} {position.size:.4f} {symbol} | PnL: ${pnl:+.2f} ({pnl_pct:+.2f}%)")
+            return
+        
+        logging.info(f"No open position found for {symbol} to flash close.")
+
+    async def fetch_ohlcv(self, symbol: str, timeframe: str = "1m", limit: int = 15) -> list:
+        data = await self._public_get(
             "/market/kline", {"symbol": symbol, "interval": timeframe, "limit": limit})
         ohlcv = []
         for k in data:

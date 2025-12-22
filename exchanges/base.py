@@ -4,12 +4,13 @@ from typing import Any, Optional, List, Dict
 
 
 class Position:
-    def __init__(self, positionId: str, side: str, size: float, entry_price: float, symbol: str):
+    def __init__(self, positionId: str, side: str, size: float, entry_price: float, symbol: str, timestamp: int):
         self.positionId = positionId
         self.side = side  # "BUY" or "SELL"
         self.size = size
         self.entry_price = entry_price
         self.symbol = symbol
+        self.timestamp = timestamp
         self.pnl: float = 0.0  # Profit/Loss in USD
         self.pnl_percent: float = 0.0  # Profit/Loss percentage
 
@@ -38,7 +39,8 @@ class BaseExchange(ABC):
 
     @abstractmethod
     def open_position(self, symbol: str, side: str,
-                      size: str, sl_pct: Optional[int]): ...
+                      size: str, sl_pct: Optional[float] = None, 
+                      tp_pct: Optional[float] = None) -> Dict: ...
 
     @abstractmethod
     def flash_close_position(self, symbol: str): ...

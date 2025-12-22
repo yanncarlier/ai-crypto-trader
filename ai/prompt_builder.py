@@ -1,9 +1,7 @@
 # ai/prompt_builder.py
 import json
 from datetime import datetime
-from typing import List, Dict, Any
-
-from config.settings import TradingConfig
+from typing import List, Dict, Any, Optional
 
 # Example type aliases for clarity (adjust based on your actual data structures)
 OHLCV = List[Dict[str, Any]]  # e.g., [{'timestamp': '...', 'open': ..., 'high': ..., 'low': ..., 'close': ..., 'volume': ...}, ...]
@@ -18,8 +16,9 @@ def build_prompt(
     price_history_long: OHLCV,
     indicators: Dict[str, Any],
     predictive_signals: Dict[str, Any],
-    symbol: str = None,
-    currency: str = None
+    config: Dict[str, Any],
+    symbol: Optional[str] = None,
+    currency: Optional[str] = None
 ) -> str:
     """
     Build a dynamic, recurring AI prompt for the trading loop.
@@ -28,18 +27,30 @@ def build_prompt(
     technical indicators, predictive signals, and a trading rules recap.
     
     The response is structured as valid JSON for easy parsing.
-    """
-    config = TradingConfig()
     
+    Args:
+        timestamp: Current timestamp
+        minutes_elapsed: Minutes since the bot started
+        account_balance: Current account balance
+        equity: Current account equity
+        open_positions: List of open positions
+        price_history_short: Short-term price history (e.g., 10-minute candles)
+        price_history_long: Long-term price history (e.g., 40-hour candles)
+        indicators: Technical indicators
+        predictive_signals: Predictive market signals
+        config: Configuration dictionary
+        symbol: Optional symbol override
+        currency: Optional currency override
+    """
     # Use config values with fallbacks
-    symbol = symbol or config.SYMBOL
-    currency = currency or config.CURRENCY
-    crypto_name = config.CRYPTO
-    leverage = config.LEVERAGE
-    position_size = config.POSITION_SIZE
-    stop_loss_pct = config.STOP_LOSS_PERCENT
-    take_profit_pct = config.TAKE_PROFIT_PERCENT
-    taker_fee = config.TAKER_FEE * 100  # Convert to percentage for display
+    symbol = symbol or config.get('SYMBOL', 'BTCUSDT')
+    currency = currency or config.get('CURRENCY', 'USDT')
+    crypto_name = config.get('CRYPTO', 'Bitcoin')
+    leverage = config.get('LEVERAGE', 2)
+    position_size = config.get('POSITION_SIZE', '10%')
+    stop_loss_pct = config.get('STOP_LOSS_PERCENT', 10)
+    take_profit_pct = config.get('TAKE_PROFIT_PERCENT')
+    taker_fee = config.get('TAKER_FEE', 0.0006) * 100  # Convert to percentage for display
 
     # Format open positions
     positions_str = "\n".join([
@@ -57,17 +68,23 @@ def build_prompt(
             lines.append(f"- {ts}: O={o:,.2f}, H={h:,.2f}, L={l:,.2f}, C={c:,.2f}, V={v:,.0f}")
         return "\n".join(lines)
 
-    # Timeframes from config
-    short_tf = f"{config.CYCLE_MINUTES}-minute"
-    long_tf = f"{config.CYCLE_MINUTES * 4}-hour"  # 4x cycle for long-term view
+    # Timeframes from config with fallback values
+    cycle_minutes = config.get('CYCLE_MINUTES', 10)
+    short_tf = f"{cycle_minutes}-minute"
+    long_tf = f"{cycle_minutes * 4}-hour"  # 4x cycle for long-term view
 
-    # Trading rules from config
+    # Trading rules from config with fallback values
+    max_pos_size_pct = float(config.get('MAX_POSITION_SIZE_PCT', 10)) / 100  # Convert percentage to decimal
+    daily_loss_pct = float(config.get('DAILY_LOSS_LIMIT_PCT', 2)) / 100
+    max_drawdown_pct = float(config.get('MAX_DRAWDOWN_PCT', 5)) / 100
+    max_hold_hours = int(config.get('MAX_HOLD_HOURS', 24))
+    
     rules_recap = f"""
 Trading Rules Recap:
-- Max position size: {config.MAX_POSITION_SIZE_PCT*100:.0f}% of account equity
-- Max daily loss: {config.DAILY_LOSS_LIMIT_PCT*100:.0f}% of account
-- Max drawdown: {config.MAX_DRAWDOWN_PCT*100:.0f}% before stopping
-- Max hold time: {config.MAX_HOLD_HOURS} hours
+- Max position size: {max_pos_size_pct*100:.0f}% of account equity
+- Max daily loss: {daily_loss_pct*100:.0f}% of account
+- Max drawdown: {max_drawdown_pct*100:.0f}% before stopping
+- Max hold time: {max_hold_hours} hours
 - Leverage: {leverage}x
 - Position size: {position_size}
 - Stop loss: {f'{stop_loss_pct}%' if stop_loss_pct else 'Not set'}
@@ -79,7 +96,7 @@ Trading Rules Recap:
     return f"""
 You are a top-level professional {crypto_name} trader focused on multiplying the account while strictly safeguarding capital.
 
-This is a recurring analysis sent every {config.CYCLE_MINUTES} minutes during live trading.
+This is a recurring analysis sent every {cycle_minutes} minutes during live trading.
 
 CURRENT MARKET STATE:
 - Timestamp: {timestamp.isoformat()}
@@ -114,7 +131,7 @@ Respond with valid JSON only (no markdown, no extra text, no explanations outsid
   "confidence": 0.0 to 1.0,
   "reasons": "Detailed reasoning incorporating timeframe alignment, key indicators, volume, predictive signals, and risk considerations.",
   "action": "BUY" | "SELL" | "CLOSE_POSITION" | "HOLD" | "NO_TRADE",
-  "size_percent_of_equity": 0.0 to {min(100.0, config.MAX_POSITION_SIZE_PCT*100):.1f} (suggested position size as % of equity, 0 if no new trade),
+  "size_percent_of_equity": 0.0 to {min(100.0, max_pos_size_pct*100):.1f} (suggested position size as % of equity, 0 if no new trade),
   "stop_loss_price": null | float,
   "take_profit_price": null | float,
   "additional_notes": "Any trailing stop suggestions, alerts, or observations."

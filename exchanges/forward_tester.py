@@ -7,18 +7,36 @@ from .base import BaseExchange, Position
 
 
 class ForwardTester(BaseExchange):
-    def __init__(self, config):
-        self.config = config
-        self.balance = config.INITIAL_CAPITAL
+    def __init__(self, config: Dict[str, Any]):
+        """Initialize the forward tester with configuration.
+        
+        Args:
+            config: Configuration dictionary with trading parameters
+        """
+        self.config = config or {}
+        self.balance = self.config.get('INITIAL_CAPITAL', 10000.0)
         self.positions: List[Position] = []
-        self.exchange = ccxt.binance({
+        
+        # Initialize CCXT exchange for market data
+        exchange_config = {
             'options': {
                 'defaultType': 'future',
                 'adjustForTimeDifference': True,
             },
             'enableRateLimit': True,
-        })
-        self.exchange.load_markets()
+            # Add any other CCXT-specific configuration
+        }
+        
+        # Allow overriding exchange via config
+        exchange_id = self.config.get('PAPER_EXCHANGE', 'binance')
+        exchange_class = getattr(ccxt, exchange_id, ccxt.binance)
+        self.exchange = exchange_class(exchange_config)
+        
+        try:
+            self.exchange.load_markets()
+        except Exception as e:
+            logging.warning(f"Failed to load markets: {e}")
+            self.exchange.load_markets = lambda: None  # Disable future load attempts
 
     def get_current_price(self, symbol: str) -> float:
         ticker = self.exchange.fetch_ticker(symbol)

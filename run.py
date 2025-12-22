@@ -2,79 +2,124 @@
 import asyncio
 from core.trader import TradingBot
 from exchanges.bitunix import BitunixFutures
-from config.settings import TradingConfig
 import os
 from dotenv import load_dotenv
 import sys
 from pathlib import Path
 import signal
+from exchanges.forward_tester import ForwardTester
+from typing import Dict, Any
 
 sys.path.insert(0, str(Path(__file__).parent))
 load_dotenv()
 
-def create_config() -> TradingConfig:
-    """Create trading configuration from .env and defaults"""
+def get_env_bool(name: str, default: bool = False) -> bool:
+    """Get boolean value from environment variable"""
+    val = os.getenv(name, '').lower()
+    if val in ('true', '1', 't', 'y', 'yes'):
+        return True
+    elif val in ('false', '0', 'f', 'n', 'no', ''):
+        return default
+    return default
+
+def get_env_float(name: str, default: float) -> float:
+    """Get float value from environment variable"""
     try:
-        # Get FORWARD_TESTING from .env
-        forward_testing = os.getenv(
-            "FORWARD_TESTING", "false").lower() in ("true", "1", "yes")
+        return float(os.getenv(name, str(default)))
+    except (ValueError, TypeError):
+        return default
+
+def get_env_int(name: str, default: int) -> int:
+    """Get integer value from environment variable"""
+    try:
+        return int(os.getenv(name, str(default)))
+    except (ValueError, TypeError):
+        return default
+
+def get_env_str(name: str, default: str) -> str:
+    """Get string value from environment variable"""
+    return os.getenv(name, default)
+
+def get_config() -> Dict[str, Any]:
+    """Get configuration from environment variables"""
+    try:
+        config = {
+            # Trading Configuration
+            'CRYPTO': 'Bitcoin',
+            'SYMBOL': get_env_str('SYMBOL', 'BTCUSDT'),
+            'CURRENCY': get_env_str('CURRENCY', 'USDT'),
+            'CYCLE_MINUTES': get_env_int('CYCLE_MINUTES', 10),
+            'LEVERAGE': get_env_int('LEVERAGE', 2),
+            'MARGIN_MODE': get_env_str('MARGIN_MODE', 'ISOLATED'),
+            'POSITION_SIZE': get_env_str('POSITION_SIZE', '10%'),
+            'STOP_LOSS_PERCENT': get_env_int('STOP_LOSS_PERCENT', 10) or None,
+            'TAKE_PROFIT_PERCENT': get_env_int('TAKE_PROFIT_PERCENT', 0) or None,
+            'INITIAL_CAPITAL': get_env_float('INITIAL_CAPITAL', 10000.0),
+            'TAKER_FEE': get_env_float('TAKER_FEE', 0.0006),
+            
+            # Risk Management
+            'MAX_POSITION_SIZE_PCT': get_env_float('MAX_POSITION_SIZE_PCT', 10.0) / 100,
+            'DAILY_LOSS_LIMIT_PCT': get_env_float('DAILY_LOSS_LIMIT_PCT', 2.0) / 100,
+            'MAX_DRAWDOWN_PCT': get_env_float('MAX_DRAWDOWN_PCT', 5.0) / 100,
+            'MAX_HOLD_HOURS': get_env_int('MAX_HOLD_HOURS', 24),
+            
+            # Configuration
+            'FORWARD_TESTING': get_env_bool('FORWARD_TESTING', False),
+            'LLM_PROVIDER': get_env_str('LLM_PROVIDER', 'deepseek'),
+            'LLM_MODEL': get_env_str('LLM_MODEL', 'default'),
+            'LLM_TEMPERATURE': get_env_float('LLM_TEMPERATURE', 0.2),
+            'LLM_MAX_TOKENS': get_env_int('LLM_MAX_TOKENS', 800),
+            'EXCHANGE': get_env_str('EXCHANGE', 'BITUNIX'),
+            'TEST_NET': get_env_bool('TEST_NET', False),
+            'EXCHANGE_API_KEY': get_env_str('EXCHANGE_API_KEY', ''),
+            'EXCHANGE_API_SECRET': get_env_str('EXCHANGE_API_SECRET', ''),
+            'LLM_API_KEY': get_env_str('LLM_API_KEY', ''),
+        }
         
-        # Risk management parameters
-        max_position_size_pct = float(os.getenv("MAX_POSITION_SIZE_PCT", "10")) / 100
-        daily_loss_limit_pct = float(os.getenv("DAILY_LOSS_LIMIT_PCT", "2")) / 100
-        max_drawdown_pct = float(os.getenv("MAX_DRAWDOWN_PCT", "5")) / 100
-        max_hold_hours = int(os.getenv("MAX_HOLD_HOURS", "24"))
+        # Add RUN_NAME property
+        mode = "paper" if config['FORWARD_TESTING'] else "LIVE"
+        config['RUN_NAME'] = f"{mode}_{config['EXCHANGE']}_{config['CRYPTO']}_{config['SYMBOL']}_{config['CYCLE_MINUTES']}min_{config['LEVERAGE']}x"
         
-        # Create config with all defaults from settings.py
-        config = TradingConfig(
-            FORWARD_TESTING=forward_testing,
-            EXCHANGE="BITUNIX",  # Force Bitunix
-            TEST_NET=False,  # Bitunix doesn't have testnet
-            # Risk management settings
-            MAX_POSITION_SIZE_PCT=max_position_size_pct,
-            DAILY_LOSS_LIMIT_PCT=daily_loss_limit_pct,
-            MAX_DRAWDOWN_PCT=max_drawdown_pct,
-            MAX_HOLD_HOURS=max_hold_hours,
-        )
         # Validate settings
-        if config.LEVERAGE < 1 or config.LEVERAGE > 125:
+        if config['LEVERAGE'] < 1 or config['LEVERAGE'] > 125:
             raise ValueError("Leverage must be between 1 and 125")
-        if config.MARGIN_MODE.upper() not in ['ISOLATED', 'CROSS']:
+        if config['MARGIN_MODE'].upper() not in ['ISOLATED', 'CROSS']:
             raise ValueError("Margin mode must be ISOLATED or CROSS")
-        if config.CYCLE_MINUTES < 1:
+        if config['CYCLE_MINUTES'] < 1:
             raise ValueError("CYCLE_MINUTES must be at least 1")
+            
         return config
+        
     except Exception as e:
         print(f"Configuration error: {e}")
         sys.exit(1)
 
 async def main():
     try:
-        config = create_config()
+        config = get_config()
         # Show configuration
-        mode = "PAPER" if config.FORWARD_TESTING else "LIVE"
-        print(f"⚡ Bitunix Futures Trader | {mode} | {config.LLM_PROVIDER}")
-        print(f"📊 Symbol: {config.SYMBOL} | Leverage: {config.LEVERAGE}x")
-        print(f"📈 Position: {config.POSITION_SIZE} | Stop Loss: {config.STOP_LOSS_PERCENT}%")
-        print(f"⏱️  Cycle: {config.CYCLE_MINUTES} minutes")
+        mode = "PAPER" if config['FORWARD_TESTING'] else "LIVE"
+        print(f"⚡ Bitunix Futures Trader | {mode} | {config['LLM_PROVIDER']}")
+        print(f"📊 Symbol: {config['SYMBOL']} | Leverage: {config['LEVERAGE']}x")
+        print(f"📈 Position: {config['POSITION_SIZE']} | Stop Loss: {config['STOP_LOSS_PERCENT']}%")
+        print(f"⏱️  Cycle: {config['CYCLE_MINUTES']} minutes")
         
-        if config.FORWARD_TESTING:
+        if config['FORWARD_TESTING']:
             print("📝 Running in PAPER TRADING mode")
-            from exchanges.forward_tester import ForwardTester
             exchange = ForwardTester(config)
         else:
             # Live trading with Bitunix
-            api_key = os.getenv("EXCHANGE_API_KEY")
-            api_secret = os.getenv("EXCHANGE_API_SECRET")
+            api_key = config['EXCHANGE_API_KEY']
+            api_secret = config['EXCHANGE_API_SECRET']
             if not api_key or not api_secret:
                 raise ValueError("Bitunix API keys required for live trading")
                 
             print("🚀 LIVE TRADING with Bitunix Futures")
             print("⚡ Risk Management Settings:")
-            print(f"   • Max Position Size: {config.MAX_POSITION_SIZE_PCT*100:.1f}%")
-            print(f"   • Daily Loss Limit: {config.DAILY_LOSS_LIMIT_PCT*100:.1f}%")
-            print(f"   • Max Drawdown: {config.MAX_DRAWDOWN_PCT*100:.1f}%")
-            print(f"   • Max Hold Time: {config.MAX_HOLD_HOURS} hours")
+            print(f"   • Max Position Size: {config['MAX_POSITION_SIZE_PCT']*100:.1f}%")
+            print(f"   • Daily Loss Limit: {config['DAILY_LOSS_LIMIT_PCT']*100:.1f}%")
+            print(f"   • Max Drawdown: {config['MAX_DRAWDOWN_PCT']*100:.1f}%")
+            print(f"   • Max Hold Time: {config['MAX_HOLD_HOURS']} hours")
             
             exchange = BitunixFutures(api_key, api_secret, config)
             
@@ -83,13 +128,13 @@ async def main():
                 await exchange.start_monitoring()
                 
                 # Get account summary
-                account_summary = exchange.get_account_summary(config.CURRENCY, config.SYMBOL)
+                account_summary = await exchange.get_account_summary(config['CURRENCY'], config['SYMBOL'])
                 live_balance = account_summary['balance']
                 equity = account_summary['equity']
-                config.INITIAL_CAPITAL = live_balance
+                config['INITIAL_CAPITAL'] = live_balance
                 
-                print(f"💰 Balance: ${live_balance:,.2f} {config.CURRENCY}")
-                print(f"📊 Equity: ${equity:,.2f} {config.CURRENCY}")
+                print(f"💰 Balance: ${live_balance:,.2f} {config['CURRENCY']}")
+                print(f"📊 Equity: ${equity:,.2f} {config['CURRENCY']}")
                 
                 if 'unrealized_pnl' in account_summary:
                     pnl = account_summary['unrealized_pnl']
@@ -103,8 +148,11 @@ async def main():
 
         # Initialize and run the trading bot
         bot = TradingBot(config=config, exchange=exchange)
-        # Run the trading cycle (synchronous call)
-        bot.run_cycle()
+        
+        while True:
+            await bot.run_cycle()
+            print(f"--- Cycle finished, waiting {config['CYCLE_MINUTES']} minutes ---")
+            await asyncio.sleep(config['CYCLE_MINUTES'] * 60)
 
     except Exception as e:
         print(f"❌ Error: {e}")

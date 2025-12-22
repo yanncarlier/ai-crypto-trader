@@ -1,10 +1,9 @@
 # core/trader.py
 import random
 import logging
-import time
-import signal
+import asyncio
 from datetime import datetime, timedelta
-from config.settings import TradingConfig
+from typing import Dict, Any
 from exchanges.base import BaseExchange
 from ai.prompt_builder import build_prompt
 from ai.provider import send_request, save_response, AIOutlook
@@ -14,34 +13,40 @@ from tenacity import retry, stop_after_attempt, wait_fixed
 
 
 class TradingBot:
-    def __init__(self, config: TradingConfig, exchange: BaseExchange):
+    def __init__(self, config: Dict[str, Any], exchange: BaseExchange):
+        """Initialize the trading bot with configuration dictionary.
+        
+        Args:
+            config: Dictionary containing all configuration parameters
+            exchange: Exchange instance to use for trading
+        """
         self.config = config
         self.exchange = exchange
-        self.current_balance = config.INITIAL_CAPITAL
-        configure_logger(config.RUN_NAME)
-        mode = "PAPER" if config.FORWARD_TESTING else "LIVE"
+        self.current_balance = config['INITIAL_CAPITAL']
+        configure_logger(config['RUN_NAME'])
+        mode = "PAPER" if config['FORWARD_TESTING'] else "LIVE"
         logging.info(
-            f"{mode} | {config.SYMBOL} | {config.CYCLE_MINUTES}min | {config.LEVERAGE}x")
-        logging.info(f"AI: {config.LLM_PROVIDER} ({config.LLM_MODEL})")
+            f"{mode} | {config['SYMBOL']} | {config['CYCLE_MINUTES']}min | {config['LEVERAGE']}x")
+        logging.info(f"AI: {config['LLM_PROVIDER']} ({config['LLM_MODEL']})")
 
-    def _get_effective_balance(self) -> float:
+    async def _get_effective_balance(self) -> float:
         """Get the current balance (live or paper)"""
-        if self.config.FORWARD_TESTING:
-            return self.config.INITIAL_CAPITAL
+        if self.config['FORWARD_TESTING']:
+            return self.config['INITIAL_CAPITAL']
         try:
-            fresh_balance = self.exchange.get_account_balance(
-                self.config.CURRENCY)
+            fresh_balance = await self.exchange.get_account_balance(
+                self.config['CURRENCY'])
             self.current_balance = fresh_balance
             return fresh_balance
         except Exception:
             return self.current_balance
 
     @retry(stop=stop_after_attempt(2), wait=wait_fixed(3))
-    def _get_market_data(self, symbol: str):
+    async def _get_market_data(self, symbol: str):
         """Get market data including cycle-specific volume"""
-        cycle_minutes = self.config.CYCLE_MINUTES
-        if self.config.FORWARD_TESTING:
-            price = self.exchange.get_current_price(symbol)
+        cycle_minutes = self.config['CYCLE_MINUTES']
+        if self.config['FORWARD_TESTING']:
+            price = await self.exchange.get_current_price(symbol)
             change_pct = random.uniform(-2.5, 2.5)
             # For paper trading, generate realistic volumes
             volume_24h = random.uniform(200_000_000, 500_000_000)
@@ -54,7 +59,7 @@ class TradingBot:
         candles_needed = self._calculate_candles_needed(
             cycle_minutes, timeframe)
         # Fetch OHLCV data
-        ohlcv = self.exchange.fetch_ohlcv(
+        ohlcv = await self.exchange.fetch_ohlcv(
             symbol, timeframe=timeframe, limit=candles_needed)
         if len(ohlcv) < 2:
             raise ValueError(
@@ -154,137 +159,136 @@ class TradingBot:
             volume_sum += ohlcv[-(i+1)][5]
         return volume_sum
 
-    def _get_ai_analysis_with_timeout(self, price: float, change_pct: float,
+    async def _get_ai_analysis_with_timeout(self, price: float, change_pct: float,
                                      volume_24h: float, volume_cycle: float, symbol: str):
         """Get AI analysis with timeout protection"""
-        def timeout_handler(signum, frame):
-            raise TimeoutError("AI analysis timeout")
-        
-        original_handler = signal.signal(signal.SIGALRM, timeout_handler)
-        signal.alarm(30)
-        
         try:
-            # Prepare mock data for the new prompt builder
-            timestamp = datetime.now()
-            minutes_elapsed = 0
-            account_balance = self._get_effective_balance()
-            equity = account_balance
-            open_positions = []
-            
-            # Mock price history (short and long term)
-            price_history_short = [{
-                'timestamp': (timestamp - timedelta(minutes=i)).isoformat(),
-                'open': price * (1 - (i * 0.001)),
-                'high': price * (1 - (i * 0.0005)),
-                'low': price * (1 - (i * 0.0015)),
-                'close': price * (1 - (i * 0.001)),
-                'volume': volume_24h * (1 - (i * 0.1))
-            } for i in range(20, 0, -1)]
-            
-            price_history_long = [{
-                'timestamp': (timestamp - timedelta(hours=i)).isoformat(),
-                'open': price * (1 - (i * 0.01)),
-                'high': price * (1 - (i * 0.005)),
-                'low': price * (1 - (i * 0.015)),
-                'close': price * (1 - (i * 0.01)),
-                'volume': volume_24h * (1 - (i * 0.05))
-            } for i in range(24, 0, -1)]
-            
-            # Mock indicators
-            indicators = {
-                'RSI': 45.2,
-                'MACD': {'hist': 0.5, 'signal': 0.4, 'macd': 0.6},
-                'EMA_20': price * 0.995,
-                'BB_upper': price * 1.02,
-                'BB_middle': price * 0.99,
-                'BB_lower': price * 0.98
-            }
-            
-            # Mock predictive signals
-            predictive_signals = {
-                'volatility': 0.02,
-                'order_book_depth_bid': 1000,
-                'order_book_depth_ask': 1200,
-                'sentiment_proxy': 'Neutral'
-            }
-            
-            # Build the prompt with all required parameters
-            prompt = build_prompt(
-                timestamp=timestamp,
-                minutes_elapsed=minutes_elapsed,
-                account_balance=account_balance,
-                equity=equity,
-                open_positions=open_positions,
-                price_history_short=price_history_short,
-                price_history_long=price_history_long,
-                indicators=indicators,
-                predictive_signals=predictive_signals,
-                symbol=symbol,
-                currency=self.config.CURRENCY
-            )
-            
-            # Log the complete AI prompt being sent
-            logging.info("🤖 AI PROMPT SENT:")
-            prompt_lines = prompt.strip().split('\n')
-            for line in prompt_lines:
-                logging.info(f"   {line}")
-            logging.info("")  # Empty line for separation
-            
-            outlook = send_request(prompt, self.config)
-            return outlook
-            
-        except TimeoutError:
+            async def get_analysis():
+                # Prepare mock data for the new prompt builder
+                timestamp = datetime.now()
+                minutes_elapsed = 0
+                account_balance = await self._get_effective_balance()
+                equity = account_balance
+                open_positions = []
+
+                # Mock price history (short and long term)
+                price_history_short = [{
+                    'timestamp': (timestamp - timedelta(minutes=i)).isoformat(),
+                    'open': price * (1 - (i * 0.001)),
+                    'high': price * (1 - (i * 0.0005)),
+                    'low': price * (1 - (i * 0.0015)),
+                    'close': price * (1 - (i * 0.001)),
+                    'volume': volume_24h * (1 - (i * 0.1))
+                } for i in range(20, 0, -1)]
+
+                price_history_long = [{
+                    'timestamp': (timestamp - timedelta(hours=i)).isoformat(),
+                    'open': price * (1 - (i * 0.01)),
+                    'high': price * (1 - (i * 0.005)),
+                    'low': price * (1 - (i * 0.015)),
+                    'close': price * (1 - (i * 0.01)),
+                    'volume': volume_24h * (1 - (i * 0.05))
+                } for i in range(24, 0, -1)]
+
+                # Mock indicators
+                indicators = {
+                    'RSI': 45.2,
+                    'MACD': {'hist': 0.5, 'signal': 0.4, 'macd': 0.6},
+                    'EMA_20': price * 0.995,
+                    'BB_upper': price * 1.02,
+                    'BB_middle': price * 0.99,
+                    'BB_lower': price * 0.98
+                }
+
+                # Mock predictive signals
+                predictive_signals = {
+                    'volatility': 0.02,
+                    'order_book_depth_bid': 1000,
+                    'order_book_depth_ask': 1200,
+                    'sentiment_proxy': 'Neutral'
+                }
+
+                # Build the prompt with all required parameters
+                prompt = build_prompt(
+                    timestamp=timestamp,
+                    minutes_elapsed=minutes_elapsed,
+                    account_balance=account_balance,
+                    equity=equity,
+                    open_positions=open_positions,
+                    price_history_short=price_history_short,
+                    price_history_long=price_history_long,
+                    indicators=indicators,
+                    predictive_signals=predictive_signals,
+                    config=self.config,
+                    symbol=symbol,
+                    currency=self.config['CURRENCY']
+                )
+
+                # Log the complete AI prompt being sent
+                logging.info("🤖 AI PROMPT SENT:")
+                prompt_lines = prompt.strip().split('\n')
+                for line in prompt_lines:
+                    logging.info(f"   {line}")
+                logging.info("")  # Empty line for separation
+
+                outlook = await send_request(prompt, self.config)
+                return outlook
+
+            return await asyncio.wait_for(get_analysis(), timeout=30)
+
+        except asyncio.TimeoutError:
             logging.warning("AI timeout - using neutral")
             return AIOutlook(interpretation="Neutral", reasons="AI timeout")
         except Exception as e:
             logging.warning(f"AI error: {e}")
             return AIOutlook(interpretation="Neutral", reasons=f"AI error: {e}")
-        finally:
-            signal.alarm(0)
-            signal.signal(signal.SIGALRM, original_handler)
 
     def _calculate_position_value(self, balance: float) -> float:
         """Calculate position value based on config"""
-        if self.config.POSITION_SIZE.endswith('%'):
-            percentage = float(self.config.POSITION_SIZE[:-1]) / 100
+        position_size = self.config['POSITION_SIZE']
+        if position_size.endswith('%'):
+            percentage = float(position_size[:-1]) / 100
             return balance * percentage
         else:
-            return float(self.config.POSITION_SIZE)
+            return float(position_size)
 
-    def _execute_trading_decision(self, action: str, symbol: str, position):
+    async def _execute_trading_decision(self, action: str, symbol: str, position):
         """Execute trading decision with position awareness"""
         try:
-            current_balance = self._get_effective_balance()
+            current_balance = await self._get_effective_balance()
             # Get current position details for better decision making
-            current_position = self.exchange.get_pending_positions(symbol)
-            # Set exchange parameters
-            self.exchange.set_margin_mode(symbol, self.config.MARGIN_MODE)
-            self.exchange.set_leverage(symbol, self.config.LEVERAGE)
+            current_position = await self.exchange.get_pending_positions(symbol)
             if action in ("OPEN_LONG", "REVERSE_TO_LONG"):
+                # Set exchange parameters before opening
+                await self.exchange.set_margin_mode(symbol, self.config['MARGIN_MODE'])
+                await self.exchange.set_leverage(symbol, self.config['LEVERAGE'])
                 if "REVERSE" in action and position:
                     logging.info(f"🔄 Reversing from SHORT to LONG")
-                    self.exchange.flash_close_position(symbol)
+                    await self.exchange.flash_close_position(symbol)
                 position_value = self._calculate_position_value(
                     current_balance)
-                self.exchange.open_position(
-                    symbol, "buy", self.config.POSITION_SIZE, self.config.STOP_LOSS_PERCENT
+                await self.exchange.open_position(
+                    symbol, "buy", self.config['POSITION_SIZE'], self.config['STOP_LOSS_PERCENT']
                 )
             elif action in ("OPEN_SHORT", "REVERSE_TO_SHORT"):
+                # Set exchange parameters before opening
+                await self.exchange.set_margin_mode(symbol, self.config['MARGIN_MODE'])
+                await self.exchange.set_leverage(symbol, self.config['LEVERAGE'])
                 if "REVERSE" in action and position:
                     logging.info(f"🔄 Reversing from LONG to SHORT")
-                    self.exchange.flash_close_position(symbol)
+                    await self.exchange.flash_close_position(symbol)
                 position_value = self._calculate_position_value(
                     current_balance)
-                self.exchange.open_position(
-                    symbol, "sell", self.config.POSITION_SIZE, self.config.STOP_LOSS_PERCENT
+                await self.exchange.open_position(
+                    symbol, "sell", self.config['POSITION_SIZE'], self.config['STOP_LOSS_PERCENT']
                 )
             elif action == "CLOSE" and position:
                 logging.info("🔒 Closing position")
-                self.exchange.flash_close_position(symbol)
+                await self.exchange.flash_close_position(symbol)
             else:
                 if position:
                     # Calculate PnL for existing position
-                    current_price = self.exchange.get_current_price(symbol)
+                    current_price = await self.exchange.get_current_price(symbol)
                     pnl = (current_price - position.entry_price) * \
                         position.size
                     pnl_pct = ((current_price - position.entry_price) /
@@ -296,28 +300,28 @@ class TradingBot:
         except Exception as e:
             logging.error(f"Trade failed: {e}")
 
-    def run_cycle(self):
-        symbol = self.config.SYMBOL
+    async def run_cycle(self):
+        symbol = self.config['SYMBOL']
         # Get market data (now includes both 24h and cycle volume)
         try:
-            price, change_pct, volume_24h, volume_cycle = self._get_market_data(
+            price, change_pct, volume_24h, volume_cycle = await self._get_market_data(
                 symbol)
         except Exception as e:
             logging.error(f"Market data error: {e}")
             return
         # Get AI analysis
-        outlook = self._get_ai_analysis_with_timeout(
+        outlook = await self._get_ai_analysis_with_timeout(
             price, change_pct, volume_24h, volume_cycle, symbol)
         interpretation = outlook.interpretation
-        save_response(outlook, self.config.RUN_NAME)
+        save_response(outlook, self.config['RUN_NAME'])
         # Get current position
-        position = self.exchange.get_pending_positions(symbol)
+        position = await self.exchange.get_pending_positions(symbol)
         current_side = position.side if position else "FLAT"
         action = get_action(interpretation, current_side)
         # Log decision with context
-        cycle_label = f"{self.config.CYCLE_MINUTES}min"
+        cycle_label = f"{self.config['CYCLE_MINUTES']}min"
         if position:
-            current_price = self.exchange.get_current_price(symbol)
+            current_price = await self.exchange.get_current_price(symbol)
             pnl = (current_price - position.entry_price) * position.size
             pnl_pct = ((current_price - position.entry_price) /
                        position.entry_price) * 100
@@ -327,4 +331,4 @@ class TradingBot:
             logging.info(
                 f"${price:,.0f} | Δ{change_pct:+.1f}% ({cycle_label}) | AI: {interpretation} | Pos: {current_side} → {action}")
         # Execute trade
-        self._execute_trading_decision(action, symbol, position)
+        await self._execute_trading_decision(action, symbol, position)
