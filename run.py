@@ -99,13 +99,13 @@ async def main():
         config = get_config()
         # Show configuration
         mode = "PAPER" if config['FORWARD_TESTING'] else "LIVE"
-        print(f"⚡ Bitunix Futures Trader | {mode} | {config['LLM_PROVIDER']}")
-        print(f"📊 Symbol: {config['SYMBOL']} | Leverage: {config['LEVERAGE']}x")
-        print(f"📈 Position: {config['POSITION_SIZE']} | Stop Loss: {config['STOP_LOSS_PERCENT']}%")
-        print(f"⏱️  Cycle: {config['CYCLE_MINUTES']} minutes")
+        print(f"Bitunix Futures Trader | {mode} | {config['LLM_PROVIDER']}")
+        print(f"Symbol: {config['SYMBOL']} | Leverage: {config['LEVERAGE']}x")
+        print(f"Position: {config['POSITION_SIZE']} | Stop Loss: {config['STOP_LOSS_PERCENT']}%")
+        print(f"Cycle: {config['CYCLE_MINUTES']} minutes")
         
         if config['FORWARD_TESTING']:
-            print("📝 Running in PAPER TRADING mode")
+            print("Running in PAPER TRADING mode")
             exchange = ForwardTester(config)
         else:
             # Live trading with Bitunix
@@ -114,8 +114,8 @@ async def main():
             if not api_key or not api_secret:
                 raise ValueError("Bitunix API keys required for live trading")
                 
-            print("🚀 LIVE TRADING with Bitunix Futures")
-            print("⚡ Risk Management Settings:")
+            print("LIVE TRADING with Bitunix Futures")
+            print("Risk Management Settings:")
             print(f"   • Max Position Size: {config['MAX_POSITION_SIZE_PCT']*100:.1f}%")
             print(f"   • Daily Loss Limit: {config['DAILY_LOSS_LIMIT_PCT']*100:.1f}%")
             print(f"   • Max Drawdown: {config['MAX_DRAWDOWN_PCT']*100:.1f}%")
@@ -133,8 +133,8 @@ async def main():
                 equity = account_summary['equity']
                 config['INITIAL_CAPITAL'] = live_balance
                 
-                print(f"💰 Balance: ${live_balance:,.2f} {config['CURRENCY']}")
-                print(f"📊 Equity: ${equity:,.2f} {config['CURRENCY']}")
+                print(f"Balance: ${live_balance:,.2f} {config['CURRENCY']}")
+                print(f"Equity: ${equity:,.2f} {config['CURRENCY']}")
                 
                 if 'unrealized_pnl' in account_summary:
                     pnl = account_summary['unrealized_pnl']
@@ -143,7 +143,7 @@ async def main():
                         pnl_sign = '+' if pnl > 0 else ''
                         print(f"   • Unrealized PnL: {pnl_sign}${abs(pnl):,.2f} ({pnl_sign}{abs(pnl_pct):.2f}%)")
             except Exception as e:
-                print(f"⚠️ Could not fetch balance: {e}")
+                print(f"Could not fetch balance: {e}")
                 raise
 
         # Initialize and run the trading bot
@@ -155,7 +155,7 @@ async def main():
             await asyncio.sleep(config['CYCLE_MINUTES'] * 60)
 
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"Error: {e}")
         if 'exchange' in locals():
             try:
                 if hasattr(exchange, 'close'):
@@ -163,7 +163,7 @@ async def main():
                 elif hasattr(exchange, 'close_connection'):
                     await exchange.close_connection()
             except Exception as close_error:
-                print(f"⚠️ Error during cleanup: {close_error}")
+                print(f"Error during cleanup: {close_error}")
         sys.exit(1)
 
 def signal_handler(sig, frame):

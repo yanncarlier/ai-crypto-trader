@@ -225,7 +225,7 @@ class TradingBot:
                 )
 
                 # Log the complete AI prompt being sent
-                logging.info("🤖 AI PROMPT SENT:")
+                logging.info("AI PROMPT SENT:")
                 prompt_lines = prompt.strip().split('\n')
                 for line in prompt_lines:
                     logging.info(f"   {line}")
@@ -263,7 +263,7 @@ class TradingBot:
                 await self.exchange.set_margin_mode(symbol, self.config['MARGIN_MODE'])
                 await self.exchange.set_leverage(symbol, self.config['LEVERAGE'])
                 if "REVERSE" in action and position:
-                    logging.info(f"🔄 Reversing from SHORT to LONG")
+                    logging.info("Reversing from SHORT to LONG")
                     await self.exchange.flash_close_position(symbol)
                 position_value = self._calculate_position_value(
                     current_balance)
@@ -275,7 +275,7 @@ class TradingBot:
                 await self.exchange.set_margin_mode(symbol, self.config['MARGIN_MODE'])
                 await self.exchange.set_leverage(symbol, self.config['LEVERAGE'])
                 if "REVERSE" in action and position:
-                    logging.info(f"🔄 Reversing from LONG to SHORT")
+                    logging.info("Reversing from LONG to SHORT")
                     await self.exchange.flash_close_position(symbol)
                 position_value = self._calculate_position_value(
                     current_balance)
