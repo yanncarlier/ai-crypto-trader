@@ -3,6 +3,8 @@ import random
 import logging
 import asyncio
 from datetime import datetime, timedelta
+import pandas as pd
+import pandas_ta as ta
 from typing import Dict, Any
 from exchanges.base import BaseExchange
 from ai.prompt_builder import build_prompt
@@ -23,6 +25,7 @@ class TradingBot:
         self.config = config
         self.exchange = exchange
         self.current_balance = config['INITIAL_CAPITAL']
+        self.start_time = datetime.now()
         configure_logger(config['RUN_NAME'])
         mode = "PAPER" if config['FORWARD_TESTING'] else "LIVE"
         logging.info(
