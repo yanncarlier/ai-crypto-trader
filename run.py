@@ -52,8 +52,8 @@ def get_config() -> Dict[str, Any]:
             'LEVERAGE': get_env_int('LEVERAGE', 2),
             'MARGIN_MODE': get_env_str('MARGIN_MODE', 'ISOLATED'),
             'POSITION_SIZE': get_env_str('POSITION_SIZE', '10%'),
-            'STOP_LOSS_PERCENT': get_env_int('STOP_LOSS_PERCENT', 10) or None,
-            'TAKE_PROFIT_PERCENT': get_env_int('TAKE_PROFIT_PERCENT', 0) or None,
+            'STOP_LOSS_PERCENT': get_env_float('STOP_LOSS_PERCENT', 10.0) or None,
+            'TAKE_PROFIT_PERCENT': get_env_float('TAKE_PROFIT_PERCENT', 0) or None,
             'INITIAL_CAPITAL': get_env_float('INITIAL_CAPITAL', 10000.0),
             'TAKER_FEE': get_env_float('TAKER_FEE', 0.0006),
             

@@ -23,13 +23,12 @@ class AIOutlook(BaseModel):
     reasons: str = Field(min_length=1)
 
 
-import httpx
-
 ...
+
 
 async def send_request(prompt: str, config: Dict[str, Any], api_key: Optional[str] = None) -> AIOutlook:
     """Send request to AI provider using config for settings
-    
+
     Args:
         prompt: The prompt to send to the AI
         config: Configuration dictionary with LLM settings
@@ -38,20 +37,20 @@ async def send_request(prompt: str, config: Dict[str, Any], api_key: Optional[st
     api_key = api_key or os.getenv("LLM_API_KEY") or config.get('LLM_API_KEY')
     if not api_key:
         return AIOutlook(interpretation="Neutral", reasons="No API key")
-        
+
     provider = config.get('LLM_PROVIDER', 'deepseek').lower()
     if provider not in PROVIDER_CONFIG:
         raise ValueError(f"Unknown LLM_PROVIDER={provider}")
-        
+
     url = PROVIDER_CONFIG[provider]["url"]
-    
+
     # Use model from config, or provider default if "default"
     model = config.get('LLM_MODEL', 'default')
     if model == "default":
         model = PROVIDER_CONFIG[provider]["default_model"]
-        
+
     temperature = config.get('LLM_TEMPERATURE', 0.2)
-    max_tokens = config.get('LLM_MAX_TOKENS', 800)
+    max_tokens = config.get('LLM_MAX_TOKENS', 1200)
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}"
@@ -94,7 +93,8 @@ async def send_request(prompt: str, config: Dict[str, Any], api_key: Optional[st
 def save_response(outlook: AIOutlook, run_name: str) -> None:
     """Save AI response to console only (no file saving)"""
     try:
-        logging.getLogger('ai').info(f"🤖 AI Response: {outlook.interpretation}")
+        logging.getLogger('ai').info(
+            f"🤖 AI Response: {outlook.interpretation}")
         logging.getLogger('ai').info(f"   Reasons: {outlook.reasons[:200]}")
     except Exception:
         pass
