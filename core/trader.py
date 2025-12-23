@@ -191,14 +191,12 @@ class TradingBot:
                 self.last_trade_time = datetime.now()
                 self.logger.info(
                     f"Trade executed: {side} {quantity} {symbol} at {current_price}")
+                balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
                 trade = {
                     'timestamp': int(datetime.now().timestamp() * 1000),
                     'side': side,
                     'quantity': quantity,
-                    'price': current_price,
-                    'pnl': 0.0,
-                    'balance': self.config.get('INITIAL_CAPITAL', 10000.0)
-                }
+                    'price': current_price
                 self.risk_manager.update_trade_history(trade)
             else:
                 self.logger.error(f"Order failed: {order}")
