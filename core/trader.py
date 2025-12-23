@@ -133,7 +133,7 @@ class TradingBot:
                 return
 
             # Execute trade
-            if ai_decision['action'] != 'HOLD':
+            if ai_decision['action'] in ['BUY', 'SELL', 'CLOSE_POSITION']:
                 print("DEBUG: Executing trade")
                 await self._execute_trade(ai_decision, current_price)
 
