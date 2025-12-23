@@ -67,7 +67,7 @@ def get_config() -> Dict[str, Any]:
             'MAX_POSITION_SIZE_PCT': get_env_float('MAX_POSITION_SIZE_PCT', 0) / 100,
             'DAILY_LOSS_LIMIT_PCT': get_env_float('DAILY_LOSS_LIMIT_PCT', 0) / 100,
             'MAX_DRAWDOWN_PCT': get_env_float('MAX_DRAWDOWN_PCT', 0) / 100,
-            'MAX_HOLD_HOURS': get_env_int('MAX_HOLD_HOURS', 0),
+            'MAX_HOLD_HOURS': get_env_float('MAX_HOLD_HOURS', 0.0),
 
             # Configuration
             'FORWARD_TESTING': get_env_bool('FORWARD_TESTING', False),

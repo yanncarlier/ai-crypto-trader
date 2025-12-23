@@ -109,7 +109,7 @@ class TradingBot:
             price_history_long = df.tail(50).reset_index().to_dict('records')
             indicators = latest_indicators
             predictive_signals = {}
-            print("DEBUG: Calling build_prompt")
+            # print("DEBUG: Calling build_prompt")
             prompt = build_prompt(
                 timestamp, minutes_elapsed, account_balance, equity, open_positions,
                 price_history_short, price_history_long, indicators, predictive_signals, self.config
