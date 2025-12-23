@@ -212,7 +212,7 @@ class TradingBot:
         balance = self.config.get('INITIAL_CAPITAL', 10000)
         position_value = balance * max_size_pct
         quantity = position_value / price
-        return quantity * 0.01  # Adjust for precision, e.g., for BTC
+        return quantity  # Raw qty from % equity
 
     def _calculate_stop_loss(self, side: str, entry_price: float) -> float:
         """Calculate stop loss price."""

@@ -22,7 +22,7 @@ fixed 10. risk_params still used: check_risk_limits max_daily_loss = self.risk_p
 
 fixed 11. Volatility hard: calculate_position_size self.risk_params.volatility_adjusted (True), atr_period=14. Configurable or remove.
 
-12. _calculate_position_size *0.01 arbitrary: BTC precision — symbol-specific min_qty better.
+fixed 12. _calculate_position_size *0.01 arbitrary: BTC precision — symbol-specific min_qty better.
 
 13. No balance in trade dict: 'balance': INITIAL_CAPITAL approx — fetch real post-trade for drawdown.
 
