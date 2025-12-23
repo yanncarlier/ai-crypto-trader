@@ -24,7 +24,7 @@ fixed 11. Volatility hard: calculate_position_size self.risk_params.volatility_a
 
 fixed 12. _calculate_position_size *0.01 arbitrary: BTC precision — symbol-specific min_qty better.
 
-13. No balance in trade dict: 'balance': INITIAL_CAPITAL approx — fetch real post-trade for drawdown.
+fixed 13. No balance in trade dict: 'balance': INITIAL_CAPITAL approx — fetch real post-trade for drawdown.
 
 14. exchange monitor_positions duplicate: Bitunix has own task, trader has one — consolidate.
 
