@@ -1,6 +1,6 @@
 Trading Bot Logic Issues:
 
-1. MAX_HOLD_HOURS truncation: .env MAX_HOLD_HOURS=0.5, get_env_int in run.py truncates to 0 ("0 hours"). Change to get_env_float.
+
 
 2. No trade history updates: risk_manager.update_trade_history(trade) never called (missing in trader.py _execute_trade/_close_position). History empty, metrics fail.
 

@@ -35,7 +35,7 @@ class RiskManager:
             balance = account_info['balance']
 
             # Get market data for volatility calculation
-            ohlcv = await self.exchange.get_ohlcv(symbol, timeframe='1d', limit=self.risk_params.atr_period + 1)
+            ohlcv = await self.exchange.get_ohlcv(symbol, timeframe=60, limit=self.risk_params.atr_period + 1)
             if len(ohlcv) < 2:
                 raise ValueError("Not enough data for volatility calculation")
 
