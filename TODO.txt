@@ -16,4 +16,4 @@ fixed 7. Trader confidence hardcoded: _parse_ai_outlook overrides AI outlook.con
 
 8. CRYPTO empty: '' if not in .env, RUN_NAME odd (e.g., LIVE_BITUNIX__BTCUSDT...).
 
-9. Generic block reason: "Trade blocked by risk management" — log specific check (confidence/position/risk).
+fixed 9. Generic block reason: "Trade blocked by risk management" — log specific check (confidence/position/risk).
