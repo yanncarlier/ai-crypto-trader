@@ -17,3 +17,19 @@ fixed 7. Trader confidence hardcoded: _parse_ai_outlook overrides AI outlook.con
 8. CRYPTO empty: '' if not in .env, RUN_NAME odd (e.g., LIVE_BITUNIX__BTCUSDT...).
 
 fixed 9. Generic block reason: "Trade blocked by risk management" — log specific check (confidence/position/risk).
+
+fixed 10. risk_params still used: check_risk_limits max_daily_loss = self.risk_params.daily_loss_limit_pct (hard 0.02). Use config['DAILY_LOSS_LIMIT_PCT'].
+
+11. Volatility hard: calculate_position_size self.risk_params.volatility_adjusted (True), atr_period=14. Configurable or remove.
+
+12. _calculate_position_size *0.01 arbitrary: BTC precision — symbol-specific min_qty better.
+
+13. No balance in trade dict: 'balance': INITIAL_CAPITAL approx — fetch real post-trade for drawdown.
+
+14. exchange monitor_positions duplicate: Bitunix has own task, trader has one — consolidate.
+
+15. No SL/TP set in trader place_order: _execute_trade no SL/TP orders.
+
+16. pnl calc in get_account_summary approx: no fees/leverage adjust.
+
+17. RUN_NAME empty fields: CRYPTO='', clean if ''.

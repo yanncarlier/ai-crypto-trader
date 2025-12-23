@@ -113,7 +113,7 @@ class RiskManager:
             # Check daily loss limit
             today = pd.Timestamp.utcnow().strftime('%Y-%m-%d')
             if today in self.daily_pnl and self.daily_pnl[today] < 0:
-                max_daily_loss = self.risk_params.daily_loss_limit_pct * \
+                max_daily_loss = self.config['DAILY_LOSS_LIMIT_PCT'] * \
                     self.config['INITIAL_CAPITAL']
                 if abs(self.daily_pnl[today]) >= max_daily_loss:
                     return False, f"Daily loss limit reached: {self.daily_pnl[today]:.2f} {self.config['CURRENCY']}"
