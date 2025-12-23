@@ -43,7 +43,7 @@ class RiskManager:
                 ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
             # Calculate position size based on risk parameters
-            max_position_value = balance * self.risk_params.max_position_size_pct
+            max_position_value = balance * self.config['MAX_POSITION_SIZE_PCT']
 
             if self.risk_params.volatility_adjusted:
                 # Use ATR for volatility-based position sizing
@@ -59,7 +59,7 @@ class RiskManager:
             if daily_pnl < 0:
                 # Reduce position size if approaching daily loss limit
                 loss_ratio = abs(
-                    daily_pnl) / (balance * self.risk_params.daily_loss_limit_pct)
+                    daily_pnl) / (balance * self.config['DAILY_LOSS_LIMIT_PCT'])
                 max_position_value *= max(0, 1 - loss_ratio)
 
             # Calculate number of contracts and apply limits
@@ -123,7 +123,7 @@ class RiskManager:
                 peak = max(t.get('balance', 0)
                            for t in self.trade_history + [{'balance': balance}])
                 drawdown = (peak - balance) / peak if peak > 0 else 0
-                if drawdown > self.risk_params.max_drawdown_pct:
+                if drawdown > self.config['MAX_DRAWDOWN_PCT']:
                     return False, f"Max drawdown exceeded: {drawdown*100:.2f}%"
 
             return True, "OK"
