@@ -154,8 +154,7 @@ class TradingBot:
         """Parse AI outlook into actionable decision."""
         action = outlook.action if outlook.action else (
             'BUY' if outlook.interpretation == 'Bullish' else 'SELL' if outlook.interpretation == 'Bearish' else 'HOLD')
-        confidence = 0.8 if action in [
-            'BUY', 'SELL'] else 0.5 if action == 'HOLD' else 0.0
+        confidence = getattr(outlook, 'confidence', None) or (0.8 if action in ['BUY', 'SELL'] else 0.5 if action == 'HOLD' else 0.0)
         reason = outlook.reasons
         return {'action': action, 'confidence': confidence, 'reason': reason}
 

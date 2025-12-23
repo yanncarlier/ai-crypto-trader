@@ -10,9 +10,9 @@ fixed 4. Hardcoded risk params: risk_manager.calculate_position_size uses self.r
 
 5. Proposed size in can_trade: proposed_size = decision.get('quantity', ...) — 'quantity' not in AI decision.
 
-6. monitor_positions unused: Defined in trader.py but not called in loop (missed exits).
+fixed 6. monitor_positions unused: Defined in trader.py but not called in loop (missed exits).
 
-7. Trader confidence hardcoded: _parse_ai_outlook overrides AI outlook.confidence with action-based values. Prefer AI confidence.
+fixed 7. Trader confidence hardcoded: _parse_ai_outlook overrides AI outlook.confidence with action-based values. Prefer AI confidence.
 
 8. CRYPTO empty: '' if not in .env, RUN_NAME odd (e.g., LIVE_BITUNIX__BTCUSDT...).
 
