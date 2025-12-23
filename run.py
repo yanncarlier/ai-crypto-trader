@@ -51,16 +51,16 @@ def get_config() -> Dict[str, Any]:
     try:
         config = {
             # Trading Configuration
-            'CRYPTO': '',
-            'SYMBOL': get_env_str('SYMBOL', ''),
-            'CURRENCY': get_env_str('CURRENCY', ''),
+            'CRYPTO': 'PLACEHOLDER',
+            'SYMBOL': get_env_str('SYMBOL', 'PLACEHOLDER'),
+            'CURRENCY': get_env_str('CURRENCY', 'PLACEHOLDER'),
             'CYCLE_MINUTES': get_env_float('CYCLE_MINUTES', 0),
             'LEVERAGE': get_env_int('LEVERAGE', 2),
-            'MARGIN_MODE': get_env_str('MARGIN_MODE', ''),
+            'MARGIN_MODE': get_env_str('MARGIN_MODE', 'PLACEHOLDER'),
             'STOP_LOSS_PERCENT': get_env_float('STOP_LOSS_PERCENT', 0) or None,
             'TAKE_PROFIT_PERCENT': get_env_float('TAKE_PROFIT_PERCENT', 0) or None,
             'INITIAL_CAPITAL': get_env_float('INITIAL_CAPITAL', 0),
-            'TAKER_FEE': get_env_float('TAKER_FEE', 0.0006),
+            'TAKER_FEE': get_env_float('TAKER_FEE', 0),
 
             # Risk Management
             'MAX_POSITION_SIZE_PCT': get_env_float('MAX_POSITION_SIZE_PCT', 0) / 100,
@@ -70,15 +70,15 @@ def get_config() -> Dict[str, Any]:
 
             # Configuration
             'FORWARD_TESTING': get_env_bool('FORWARD_TESTING', False),
-            'LLM_PROVIDER': get_env_str('LLM_PROVIDER', ''),
-            'LLM_MODEL': get_env_str('LLM_MODEL', ''),
+            'LLM_PROVIDER': get_env_str('LLM_PROVIDER', 'PLACEHOLDER'),
+            'LLM_MODEL': get_env_str('LLM_MODEL', 'PLACEHOLDER'),
             'LLM_TEMPERATURE': get_env_float('LLM_TEMPERATURE', 0),
             'LLM_MAX_TOKENS': get_env_int('LLM_MAX_TOKENS', 0),
-            'EXCHANGE': get_env_str('EXCHANGE', ''),
+            'EXCHANGE': get_env_str('EXCHANGE', 'PLACEHOLDER'),
             'TEST_NET': get_env_bool('TEST_NET', False),
-            'EXCHANGE_API_KEY': get_env_str('EXCHANGE_API_KEY', ''),
-            'EXCHANGE_API_SECRET': get_env_str('EXCHANGE_API_SECRET', ''),
-            'LLM_API_KEY': get_env_str('LLM_API_KEY', ''),
+            'EXCHANGE_API_KEY': get_env_str('EXCHANGE_API_KEY', 'PLACEHOLDER'),
+            'EXCHANGE_API_SECRET': get_env_str('EXCHANGE_API_SECRET', 'PLACEHOLDER'),
+            'LLM_API_KEY': get_env_str('LLM_API_KEY', 'PLACEHOLDER'),
             'MIN_CONFIDENCE': get_env_float('MIN_CONFIDENCE', 0),
         }
 
