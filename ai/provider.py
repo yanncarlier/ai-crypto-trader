@@ -23,6 +23,7 @@ class AIOutlook(BaseModel):
     interpretation: Literal["Bullish", "Bearish", "Neutral"]
     reasons: str = Field(min_length=1)
     action: Optional[Literal["BUY", "SELL", "CLOSE_POSITION", "HOLD", "NO_TRADE"]] = None
+    confidence: Optional[float] = Field(ge=0.0, le=1.0, default=0.5)
 
 
 ...
@@ -89,7 +90,7 @@ async def send_request(prompt: str, config: Dict[str, Any], api_key: Optional[st
                 }
                 interp = interp_map.get(action, "Neutral")
                 reasons = f"AI action: {action}"
-                return AIOutlook(interpretation=interp, reasons=reasons, action=action)
+                return AIOutlook(interpretation=interp, reasons=reasons, action=action, confidence=parsed.get('confidence', 0.5))
             return AIOutlook(**parsed)
         except:
             # Fallback keyword detection
@@ -100,7 +101,7 @@ async def send_request(prompt: str, config: Dict[str, Any], api_key: Optional[st
                 interp = "Bearish"
             else:
                 interp = "Neutral"
-            return AIOutlook(interpretation=interp, reasons=content[:200])
+            return AIOutlook(interpretation=interp, reasons=content[:200], confidence=0.5)
     except Exception as e:
         logging.getLogger('ai').warning(f"AI error: {e}")
         return AIOutlook(interpretation="Neutral", reasons=f"Error: {e}")

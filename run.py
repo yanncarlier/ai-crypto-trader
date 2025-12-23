@@ -80,6 +80,7 @@ def get_config() -> Dict[str, Any]:
             'EXCHANGE_API_KEY': get_env_str('EXCHANGE_API_KEY', ''),
             'EXCHANGE_API_SECRET': get_env_str('EXCHANGE_API_SECRET', ''),
             'LLM_API_KEY': get_env_str('LLM_API_KEY', ''),
+            'MIN_CONFIDENCE': get_env_float('MIN_CONFIDENCE', 0),
         }
 
         # Add RUN_NAME property

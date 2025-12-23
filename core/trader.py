@@ -18,7 +18,7 @@ import traceback
 class TradingBot:
     def __init__(self, config: Dict[str, Any], exchange: BaseExchange):
         """Initialize the trading bot with configuration dictionary.
-        
+
         Args:
             config: Dictionary containing all configuration parameters
             exchange: Exchange instance to use for trading
@@ -35,45 +35,47 @@ class TradingBot:
         try:
             self.logger.info("Starting trading cycle")
             print("DEBUG: Starting trading cycle")
-            
+
             # Fetch market data
-            print("DEBUG: About to fetch OHLCV")
+            # print("DEBUG: About to fetch OHLCV")
             ohlcv = await self.exchange.get_ohlcv(
                 self.config['SYMBOL'],
                 timeframe=self.config['CYCLE_MINUTES'],
                 limit=100
             )
-            print(f"DEBUG: OHLCV fetched, length: {len(ohlcv) if ohlcv else 0}")
+            # print(f"DEBUG: OHLCV fetched, length: {len(ohlcv) if ohlcv else 0}")
             if not ohlcv or len(ohlcv) < 50:
                 self.logger.warning("Insufficient market data")
                 return
-            
-            print("DEBUG: Creating DataFrame from OHLCV")
-            df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            df['timestamp'] = pd.to_datetime(df['timestamp'].astype(int), unit='ms')
+
+            # print("DEBUG: Creating DataFrame from OHLCV")
+            df = pd.DataFrame(
+                ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            df['timestamp'] = pd.to_datetime(
+                df['timestamp'].astype(int), unit='ms')
             df.set_index('timestamp', inplace=True)
-            print("DEBUG: DataFrame created and indexed")
-            
+            # print("DEBUG: DataFrame created and indexed")
+
             # Calculate technical indicators
-            print("DEBUG: Calculating technical indicators")
+            # print("DEBUG: Calculating technical indicators")
             df['rsi'] = ta.rsi(df['close'], length=14)
-            print("DEBUG: RSI calculated")
+            # print("DEBUG: RSI calculated")
             df['sma_20'] = ta.sma(df['close'], length=20)
-            print("DEBUG: SMA20 calculated")
+            # print("DEBUG: SMA20 calculated")
             df['sma_50'] = ta.sma(df['close'], length=50)
-            print("DEBUG: SMA50 calculated")
+            # print("DEBUG: SMA50 calculated")
             std20 = df['close'].rolling(window=20).std()
             df['bb_middle'] = df['sma_20']
             df['bb_upper'] = df['sma_20'] + (2 * std20)
             df['bb_lower'] = df['sma_20'] - (2 * std20)
-            print("DEBUG: Bollinger Bands calculated")
+            # print("DEBUG: Bollinger Bands calculated")
             df['ema_20'] = ta.ema(df['close'], length=20)
-            print("DEBUG: EMA20 calculated")
+            # print("DEBUG: EMA20 calculated")
             macd = ta.macd(df['close'])
             df['MACD_hist'] = macd['MACDh_12_26_9']
             df['MACD_signal'] = macd['MACDs_12_26_9']
-            print("DEBUG: MACD calculated")
-            
+            # print("DEBUG: MACD calculated")
+
             current_price = df['close'].iloc[-1]
             latest_indicators = {
                 'rsi': df['rsi'].iloc[-1],
@@ -92,15 +94,17 @@ class TradingBot:
                     'signal': df['MACD_signal'].iloc[-1]
                 }
             }
-            print(f"DEBUG: Indicators ready, current price: {current_price}, trend: {latest_indicators['trend']}")
-            
+            print(
+                f"DEBUG: Indicators ready, current price: {current_price}, trend: {latest_indicators['trend']}")
+
             # Get AI outlook
-            print("DEBUG: Preparing for AI prompt")
+            # print("DEBUG: Preparing for AI prompt")
             timestamp = datetime.now()
             minutes_elapsed = 0
             account_balance = self.config.get('INITIAL_CAPITAL', 10000)
             equity = account_balance
-            open_positions = [self.current_position] if self.current_position else []
+            open_positions = [
+                self.current_position] if self.current_position else []
             price_history_short = df.tail(20).reset_index().to_dict('records')
             price_history_long = df.tail(50).reset_index().to_dict('records')
             indicators = latest_indicators
@@ -110,32 +114,33 @@ class TradingBot:
                 timestamp, minutes_elapsed, account_balance, equity, open_positions,
                 price_history_short, price_history_long, indicators, predictive_signals, self.config
             )
-            print(f"DEBUG: Prompt built, length: {len(prompt)}")
-            
-            print("DEBUG: Calling send_request")
+            # print(f"DEBUG: Prompt built, length: {len(prompt)}")
+
+            # print("DEBUG: Calling send_request")
             outlook = await send_request(prompt, self.config)
-            print(f"DEBUG: AI outlook received: {outlook}")
+            # print(f"DEBUG: AI outlook received: {outlook}")
             save_response(outlook, self.config['RUN_NAME'])
-            
+
             # Parse AI outlook
-            print("DEBUG: Parsing AI outlook")
+            # print("DEBUG: Parsing AI outlook")
             ai_decision = self._parse_ai_outlook(outlook)
             print(f"DEBUG: AI decision: {ai_decision}")
-            
+
             # Check risk management
-            print("DEBUG: Checking risk management")
+            # print("DEBUG: Checking risk management")
             if not await self.risk_manager.can_trade(ai_decision, current_price, self.current_position):
                 self.logger.info("Trade blocked by risk management")
                 return
-            
+
             # Execute trade
             if ai_decision['action'] != 'HOLD':
                 print("DEBUG: Executing trade")
                 await self._execute_trade(ai_decision, current_price)
-            
-            self.logger.info(f"Cycle completed. AI Decision: {ai_decision['action']}")
+
+            self.logger.info(
+                f"Cycle completed. AI Decision: {ai_decision['action']}")
             print("DEBUG: Cycle completed successfully")
-            
+
         except Exception as e:
             print(f"DEBUG: Exception in run_cycle: {type(e).__name__}: {e}")
             import traceback
@@ -146,8 +151,10 @@ class TradingBot:
 
     def _parse_ai_outlook(self, outlook: AIOutlook) -> Dict[str, Any]:
         """Parse AI outlook into actionable decision."""
-        action = outlook.action if outlook.action else ('BUY' if outlook.interpretation == 'Bullish' else 'SELL' if outlook.interpretation == 'Bearish' else 'HOLD')
-        confidence = 0.8 if action in ['BUY', 'SELL'] else 0.5 if action == 'HOLD' else 0.0
+        action = outlook.action if outlook.action else (
+            'BUY' if outlook.interpretation == 'Bullish' else 'SELL' if outlook.interpretation == 'Bearish' else 'HOLD')
+        confidence = 0.8 if action in [
+            'BUY', 'SELL'] else 0.5 if action == 'HOLD' else 0.0
         reason = outlook.reasons
         return {'action': action, 'confidence': confidence, 'reason': reason}
 
@@ -157,11 +164,12 @@ class TradingBot:
             symbol = self.config['SYMBOL']
             side = decision['action']
             quantity = self._calculate_position_size(current_price)
-            
+
             if quantity <= 0:
-                self.logger.warning("Calculated position size is zero or negative")
+                self.logger.warning(
+                    "Calculated position size is zero or negative")
                 return
-            
+
             # Place order
             order = await self.exchange.place_order(
                 symbol=symbol,
@@ -170,7 +178,7 @@ class TradingBot:
                 quantity=quantity,
                 leverage=self.config['LEVERAGE']
             )
-            
+
             if order['status'] == 'filled':
                 self.current_position = {
                     'side': side,
@@ -181,10 +189,11 @@ class TradingBot:
                     'take_profit': self._calculate_take_profit(side, current_price)
                 }
                 self.last_trade_time = datetime.now()
-                self.logger.info(f"Trade executed: {side} {quantity} {symbol} at {current_price}")
+                self.logger.info(
+                    f"Trade executed: {side} {quantity} {symbol} at {current_price}")
             else:
                 self.logger.error(f"Order failed: {order}")
-                
+
         except Exception as e:
             self.logger.error(f"Error executing trade: {e}")
 
@@ -216,12 +225,12 @@ class TradingBot:
         """Monitor open positions and manage exits."""
         if not self.current_position:
             return
-        
+
         try:
             current_price = await self.exchange.get_ticker(self.config['SYMBOL'])
             pos = self.current_position
             side = pos['side']
-            
+
             # Check stop loss / take profit
             if side == 'BUY':
                 if current_price <= pos['stop_loss']:
@@ -233,11 +242,11 @@ class TradingBot:
                     await self._close_position('BUY', current_price, "Stop Loss")
                 elif current_price <= pos['take_profit']:
                     await self._close_position('BUY', current_price, "Take Profit")
-            
+
             # Check max hold time
             if self.last_trade_time and (datetime.now() - self.last_trade_time) > timedelta(hours=self.config['MAX_HOLD_HOURS']):
                 await self._close_position('CLOSE', current_price, "Max Hold Time")
-                
+
         except Exception as e:
             self.logger.error(f"Error monitoring position: {e}")
 
@@ -245,11 +254,11 @@ class TradingBot:
         """Close current position."""
         if not self.current_position:
             return
-        
+
         try:
             symbol = self.config['SYMBOL']
             quantity = self.current_position['quantity']
-            
+
             order = await self.exchange.place_order(
                 symbol=symbol,
                 side=side,
@@ -257,13 +266,13 @@ class TradingBot:
                 quantity=quantity,
                 leverage=self.config['LEVERAGE']
             )
-            
+
             if order['status'] == 'filled':
                 self.logger.info(f"Position closed: {reason} at {price}")
                 self.current_position = None
                 self.risk_manager.update_daily_pnl(order['pnl'])
             else:
                 self.logger.error(f"Failed to close position: {order}")
-                
+
         except Exception as e:
             self.logger.error(f"Error closing position: {e}")
