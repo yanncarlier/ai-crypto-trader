@@ -26,9 +26,9 @@ fixed 12. _calculate_position_size *0.01 arbitrary: BTC precision — symbol-spe
 
 fixed 13. No balance in trade dict: 'balance': INITIAL_CAPITAL approx — fetch real post-trade for drawdown.
 
-14. exchange monitor_positions duplicate: Bitunix has own task, trader has one — consolidate.
+fixed 14. exchange monitor_positions duplicate: Bitunix has own task, trader has one — consolidate.
 
-15. No SL/TP set in trader place_order: _execute_trade no SL/TP orders.
+fixed 15. No SL/TP set in trader place_order: _execute_trade no SL/TP orders.
 
 16. pnl calc in get_account_summary approx: no fees/leverage adjust.
 
