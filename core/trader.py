@@ -137,6 +137,7 @@ class TradingBot:
                 print("DEBUG: Executing trade")
                 await self._execute_trade(ai_decision, current_price)
 
+            await self.monitor_positions()
             self.logger.info(
                 f"Cycle completed. AI Decision: {ai_decision['action']}")
             print("DEBUG: Cycle completed successfully")

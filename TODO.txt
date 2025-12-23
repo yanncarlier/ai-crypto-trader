@@ -1,10 +1,12 @@
 Trading Bot Logic Issues:
 
+fixed 1. MAX_HOLD_HOURS truncation: .env MAX_HOLD_HOURS=0.5, get_env_int in run.py truncates to 0 ("0 hours"). Change to get_env_float.
 
+fixed 2. No trade history updates: risk_manager.update_trade_history(trade) never called (missing in trader.py _execute_trade/_close_position). History empty, metrics fail.
 
+fixed 3. POSITION_SIZE unused: config POSITION_SIZE='20%' ignored. _calculate_position_size uses MAX_POSITION_SIZE_PCT only. Parse/use POSITION_SIZE.
 
-
-4. Hardcoded risk params: risk_manager.calculate_position_size uses self.risk_params.max_position_size_pct=0.1 (hardcoded), ignores config.
+fixed 4. Hardcoded risk params: risk_manager.calculate_position_size uses self.risk_params.max_position_size_pct=0.1 (hardcoded), ignores config.
 
 5. Proposed size in can_trade: proposed_size = decision.get('quantity', ...) — 'quantity' not in AI decision.
 
