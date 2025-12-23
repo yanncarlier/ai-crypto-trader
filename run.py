@@ -57,7 +57,6 @@ def get_config() -> Dict[str, Any]:
             'CYCLE_MINUTES': get_env_float('CYCLE_MINUTES', 0),
             'LEVERAGE': get_env_int('LEVERAGE', 2),
             'MARGIN_MODE': get_env_str('MARGIN_MODE', ''),
-            'POSITION_SIZE': get_env_str('POSITION_SIZE', ''),
             'STOP_LOSS_PERCENT': get_env_float('STOP_LOSS_PERCENT', 0) or None,
             'TAKE_PROFIT_PERCENT': get_env_float('TAKE_PROFIT_PERCENT', 0) or None,
             'INITIAL_CAPITAL': get_env_float('INITIAL_CAPITAL', 0),
@@ -111,7 +110,7 @@ async def main():
         print(f"Bitunix Futures Trader | {mode} | {config['LLM_PROVIDER']}")
         print(f"Symbol: {config['SYMBOL']} | Leverage: {config['LEVERAGE']}x")
         print(
-            f"Position: {config['POSITION_SIZE']} | Stop Loss: {config['STOP_LOSS_PERCENT']}%")
+            f"Position: {config['MAX_POSITION_SIZE_PCT']*100:.1f}% | Stop Loss: {config['STOP_LOSS_PERCENT']}%")
         print(f"Cycle: {config['CYCLE_MINUTES']:.1f} minutes")
 
         if config['FORWARD_TESTING']:
