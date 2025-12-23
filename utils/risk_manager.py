@@ -27,11 +27,13 @@ class RiskManager:
     async def calculate_position_size(self, symbol: str, price: float, position_size: float) -> Tuple[float, Dict]:
         """Calculate position size based on risk parameters"""
         try:
-            account_info = await self.exchange.get_account_summary(self.config.CURRENCY, symbol)
+            account_info = await self.exchange.get_account_summary(self.config['CURRENCY'], symbol)
+            if account_info is None:
+                raise ValueError("Failed to fetch account info")
             balance = account_info['balance']
 
             # Get market data for volatility calculation
-            ohlcv = await self.exchange.fetch_ohlcv(symbol, '1d', limit=self.risk_params.atr_period + 1)
+            ohlcv = await self.exchange.get_ohlcv(symbol, timeframe='1d', limit=self.risk_params.atr_period + 1)
             if len(ohlcv) < 2:
                 raise ValueError("Not enough data for volatility calculation")
 
@@ -71,9 +73,12 @@ class RiskManager:
         except Exception as e:
             logging.error(f"Error calculating position size: {e}")
             # Fallback to 1% of balance on error
-            balance = await self.exchange.get_account_balance(self.config.CURRENCY)
-            fallback_size = (balance * 0.01) / price
-            return min(position_size, fallback_size), {'error': str(e)}
+            try:
+                balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
+                fallback_size = (balance * 0.01) / price
+                return min(position_size, fallback_size), {'error': str(e)}
+            except:
+                return 0.0, {'error': str(e)}
     
     def _calculate_atr(self, df: pd.DataFrame) -> float:
         """Calculate Average True Range (ATR)"""
@@ -99,14 +104,14 @@ class RiskManager:
     async def check_risk_limits(self, symbol: str) -> Tuple[bool, str]:
         """Check if trading should be paused due to risk limits"""
         try:
-            balance = await self.exchange.get_account_balance(self.config.CURRENCY)
+            balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
             
             # Check daily loss limit
             today = pd.Timestamp.utcnow().strftime('%Y-%m-%d')
             if today in self.daily_pnl and self.daily_pnl[today] < 0:
-                max_daily_loss = self.risk_params.daily_loss_limit_pct * self.config.INITIAL_CAPITAL
+                max_daily_loss = self.risk_params.daily_loss_limit_pct * self.config['INITIAL_CAPITAL']
                 if abs(self.daily_pnl[today]) >= max_daily_loss:
-                    return False, f"Daily loss limit reached: {self.daily_pnl[today]:.2f} {self.config.CURRENCY}"
+                    return False, f"Daily loss limit reached: {self.daily_pnl[today]:.2f} {self.config['CURRENCY']}"
             
             # Check max drawdown
             if self.trade_history:
@@ -121,6 +126,51 @@ class RiskManager:
             logging.error(f"Error checking risk limits: {e}")
             return False, f"Risk check error: {str(e)}"
     
+    async def can_trade(self, decision: Dict, current_price: float, current_position: Optional[Dict]) -> bool:
+        """Check if a trade can be executed based on risk rules."""
+        try:
+            # Check if already in position
+            if current_position:
+                return False  # Only one position at a time
+            
+            # Check overall risk limits
+            can_proceed, reason = await self.check_risk_limits(decision.get('symbol', self.config['SYMBOL']))
+            if not can_proceed:
+                logging.warning(f"Risk limit violated: {reason}")
+                return False
+            
+            # Check confidence threshold
+            confidence = decision.get('confidence', 0)
+            if confidence < 0.6:  # Arbitrary threshold
+                logging.info("AI confidence too low for trade")
+                return False
+            
+            # Check position size feasibility
+            proposed_size = decision.get('quantity', current_price * self.config['MAX_POSITION_SIZE_PCT'])
+            adjusted_size, details = await self.calculate_position_size(self.config['SYMBOL'], current_price, proposed_size)
+            if adjusted_size <= 0:
+                logging.warning("Adjusted position size is zero")
+                return False
+            
+            return True
+        except Exception as e:
+            logging.error(f"Error in can_trade: {e}")
+            return False
+
+    def update_daily_pnl(self, pnl: float):
+        """Update daily PnL tracking."""
+        today = pd.Timestamp.utcnow().strftime('%Y-%m-%d')
+        self.daily_pnl[today] = self.daily_pnl.get(today, 0) + pnl
+        logging.info(f"Updated daily PnL: {pnl}, total for today: {self.daily_pnl[today]}")
+
+    def update_trade_history(self, trade: Dict):
+        """Update trade history for performance analysis"""
+        self.trade_history.append(trade)
+        
+        # Update daily PnL
+        trade_date = pd.to_datetime(trade['timestamp'], unit='ms').strftime('%Y-%m-%d')
+        self.daily_pnl[trade_date] = self.daily_pnl.get(trade_date, 0) + trade.get('pnl', 0)
+        
     def get_risk_metrics(self) -> Dict:
         """Calculate risk metrics"""
         if not self.trade_history:

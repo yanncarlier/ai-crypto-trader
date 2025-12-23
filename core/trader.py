@@ -5,13 +5,14 @@ import asyncio
 from datetime import datetime, timedelta
 import pandas as pd
 import pandas_ta as ta
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from exchanges.base import BaseExchange
 from ai.prompt_builder import build_prompt
 from ai.provider import send_request, save_response, AIOutlook
 from utils.logger import configure_logger
-from core.decision_engine import get_action
+from utils.risk_manager import RiskManager
 from tenacity import retry, stop_after_attempt, wait_fixed
+import traceback
 
 
 class TradingBot:
@@ -24,314 +25,245 @@ class TradingBot:
         """
         self.config = config
         self.exchange = exchange
-        self.current_balance = config['INITIAL_CAPITAL']
-        self.start_time = datetime.now()
-        configure_logger(config['RUN_NAME'])
-        mode = "PAPER" if config['FORWARD_TESTING'] else "LIVE"
-        logging.info(
-            f"{mode} | {config['SYMBOL']} | {config['CYCLE_MINUTES']}min | {config['LEVERAGE']}x")
-        logging.getLogger('ai').info(f"AI: {config['LLM_PROVIDER']} ({config['LLM_MODEL']})")
-
-    async def _get_effective_balance(self) -> float:
-        """Get the current balance (live or paper)"""
-        if self.config['FORWARD_TESTING']:
-            return self.config['INITIAL_CAPITAL']
-        try:
-            fresh_balance = await self.exchange.get_account_balance(
-                self.config['CURRENCY'])
-            self.current_balance = fresh_balance
-            return fresh_balance
-        except Exception:
-            return self.current_balance
-
-    @retry(stop=stop_after_attempt(2), wait=wait_fixed(3))
-    async def _get_market_data(self, symbol: str):
-        """Get market data including cycle-specific volume"""
-        cycle_minutes = int(self.config['CYCLE_MINUTES'])
-        if self.config['FORWARD_TESTING']:
-            price = await self.exchange.get_current_price(symbol)
-            change_pct = random.uniform(-2.5, 2.5)
-            # For paper trading, generate realistic volumes
-            volume_24h = random.uniform(200_000_000, 500_000_000)
-            # Cycle volume should be roughly (cycle_minutes/1440) of 24h volume
-            volume_cycle = volume_24h * \
-                (cycle_minutes / 1440) * random.uniform(0.5, 1.5)
-            return price, change_pct, volume_24h, volume_cycle
-        # Calculate candles needed for the cycle
-        timeframe = self._determine_timeframe(cycle_minutes)
-        candles_needed = self._calculate_candles_needed(
-            cycle_minutes, timeframe)
-        # Fetch OHLCV data
-        ohlcv = await self.exchange.fetch_ohlcv(
-            symbol, timeframe=timeframe, limit=candles_needed)
-        if len(ohlcv) < 2:
-            raise ValueError(
-                f"Not enough data for {cycle_minutes}-minute analysis")
-        # Current price from last candle
-        current_price = ohlcv[-1][4]
-        # Calculate price change over the cycle
-        price_change = self._calculate_price_change(
-            ohlcv, cycle_minutes, timeframe)
-        # Calculate 24h volume (approximate from multiple candles)
-        volume_24h = self._calculate_24h_volume(ohlcv, timeframe)
-        # Calculate volume for the cycle period
-        volume_cycle = self._calculate_cycle_volume(
-            ohlcv, cycle_minutes, timeframe)
-        return current_price, price_change, volume_24h, volume_cycle
-
-    def _determine_timeframe(self, cycle_minutes: int) -> str:
-        """Determine optimal timeframe based on cycle length"""
-        if cycle_minutes <= 15:
-            return '1m'
-        elif cycle_minutes <= 60:
-            return '5m'
-        elif cycle_minutes <= 240:  # 4 hours
-            return '15m'
-        else:
-            return '1h'
-
-    def _calculate_candles_needed(self, cycle_minutes: int, timeframe: str) -> int:
-        """Calculate how many candles to fetch based on timeframe"""
-        timeframe_minutes = {
-            '1m': 1,
-            '5m': 5,
-            '15m': 15,
-            '1h': 60,
-            '4h': 240,
-            '1d': 1440
-        }.get(timeframe, 60)
-        # Fetch enough for cycle + extra for calculations
-        candles_for_cycle = (cycle_minutes // timeframe_minutes) + 1
-        # Also fetch enough for 24h volume calculation
-        candles_for_24h = (1440 // timeframe_minutes) + 1
-        # Ensure minimum 100 candles
-        return max(candles_for_cycle, candles_for_24h, 100)
-
-    def _calculate_price_change(self, ohlcv: list, cycle_minutes: int, timeframe: str) -> float:
-        """Calculate price change over the specified cycle period"""
-        timeframe_minutes = {
-            '1m': 1,
-            '5m': 5,
-            '15m': 15,
-            '1h': 60,
-            '4h': 240,
-            '1d': 1440
-        }.get(timeframe, 60)
-        # Calculate how many candles back we need for the cycle
-        candles_back = cycle_minutes // timeframe_minutes
-        if candles_back >= len(ohlcv):
-            candles_back = len(ohlcv) - 1
-        current_price = ohlcv[-1][4]
-        past_price = ohlcv[-candles_back -
-                           1][4] if candles_back < len(ohlcv) else ohlcv[0][4]
-        return ((current_price - past_price) / past_price) * 100
-
-    def _calculate_24h_volume(self, ohlcv: list, timeframe: str) -> float:
-        """Calculate approximate 24h volume"""
-        timeframe_minutes = {
-            '1m': 1,
-            '5m': 5,
-            '15m': 15,
-            '1h': 60,
-            '4h': 240,
-            '1d': 1440
-        }.get(timeframe, 60)
-        # Calculate how many candles in 24 hours
-        candles_24h = 1440 // timeframe_minutes
-        # Sum volume from available candles (up to 24h worth)
-        volume_sum = 0
-        for i in range(min(candles_24h, len(ohlcv))):
-            volume_sum += ohlcv[-(i+1)][5]
-        return volume_sum
-
-    def _calculate_cycle_volume(self, ohlcv: list, cycle_minutes: int, timeframe: str) -> float:
-        """Calculate volume for the specific cycle period"""
-        timeframe_minutes = {
-            '1m': 1,
-            '5m': 5,
-            '15m': 15,
-            '1h': 60,
-            '4h': 240,
-            '1d': 1440
-        }.get(timeframe, 60)
-        # Calculate how many candles in the cycle
-        candles_in_cycle = cycle_minutes // timeframe_minutes
-        # Sum volume from the cycle period
-        volume_sum = 0
-        for i in range(min(candles_in_cycle, len(ohlcv))):
-            volume_sum += ohlcv[-(i+1)][5]
-        return volume_sum
-
-    async def _get_ai_analysis_with_timeout(self, price: float, change_pct: float,
-                                     volume_24h: float, volume_cycle: float, symbol: str):
-        """Get AI analysis with timeout protection"""
-        try:
-            async def get_analysis():
-                # Prepare mock data for the new prompt builder
-                timestamp = datetime.now()
-                minutes_elapsed = 0
-                account_balance = await self._get_effective_balance()
-                equity = account_balance
-                open_positions = []
-
-                # Mock price history (short and long term)
-                price_history_short = [{
-                    'timestamp': (timestamp - timedelta(minutes=i)).isoformat(),
-                    'open': price * (1 - (i * 0.001)),
-                    'high': price * (1 - (i * 0.0005)),
-                    'low': price * (1 - (i * 0.0015)),
-                    'close': price * (1 - (i * 0.001)),
-                    'volume': volume_24h * (1 - (i * 0.1))
-                } for i in range(20, 0, -1)]
-
-                price_history_long = [{
-                    'timestamp': (timestamp - timedelta(hours=i)).isoformat(),
-                    'open': price * (1 - (i * 0.01)),
-                    'high': price * (1 - (i * 0.005)),
-                    'low': price * (1 - (i * 0.015)),
-                    'close': price * (1 - (i * 0.01)),
-                    'volume': volume_24h * (1 - (i * 0.05))
-                } for i in range(24, 0, -1)]
-
-                # Mock indicators
-                indicators = {
-                    'RSI': 45.2,
-                    'MACD': {'hist': 0.5, 'signal': 0.4, 'macd': 0.6},
-                    'EMA_20': price * 0.995,
-                    'BB_upper': price * 1.02,
-                    'BB_middle': price * 0.99,
-                    'BB_lower': price * 0.98
-                }
-
-                # Mock predictive signals
-                predictive_signals = {
-                    'volatility': 0.02,
-                    'order_book_depth_bid': 1000,
-                    'order_book_depth_ask': 1200,
-                    'sentiment_proxy': 'Neutral'
-                }
-
-                # Build the prompt with all required parameters
-                prompt = build_prompt(
-                    timestamp=timestamp,
-                    minutes_elapsed=minutes_elapsed,
-                    account_balance=account_balance,
-                    equity=equity,
-                    open_positions=open_positions,
-                    price_history_short=price_history_short,
-                    price_history_long=price_history_long,
-                    indicators=indicators,
-                    predictive_signals=predictive_signals,
-                    config=self.config,
-                    symbol=symbol,
-                    currency=self.config['CURRENCY']
-                )
-
-                # Log the complete AI prompt being sent
-                logging.getLogger('ai').info("AI PROMPT SENT:")
-                prompt_lines = prompt.strip().split('\n')
-                for line in prompt_lines:
-                    logging.getLogger('ai').info(f"   {line}")
-                logging.getLogger('ai').info("")  # Empty line for separation
-
-                outlook = await send_request(prompt, self.config)
-                return outlook
-
-            return await asyncio.wait_for(get_analysis(), timeout=60)
-
-        except asyncio.TimeoutError:
-            logging.getLogger('ai').warning("AI timeout - using neutral")
-            return AIOutlook(interpretation="Neutral", reasons="AI timeout")
-        except Exception as e:
-            logging.getLogger('ai').warning(f"AI error: {e}")
-            return AIOutlook(interpretation="Neutral", reasons=f"AI error: {e}")
-
-    def _calculate_position_value(self, balance: float) -> float:
-        """Calculate position value based on config"""
-        position_size = self.config['POSITION_SIZE']
-        if position_size.endswith('%'):
-            percentage = float(position_size[:-1]) / 100
-            return balance * percentage
-        else:
-            return float(position_size)
-
-    async def _execute_trading_decision(self, action: str, symbol: str, position):
-        """Execute trading decision with position awareness"""
-        try:
-            current_balance = await self._get_effective_balance()
-            # Get current position details for better decision making
-            current_position = await self.exchange.get_pending_positions(symbol)
-            if action in ("OPEN_LONG", "REVERSE_TO_LONG"):
-                # Set exchange parameters before opening
-                await self.exchange.set_margin_mode(symbol, self.config['MARGIN_MODE'])
-                await self.exchange.set_leverage(symbol, self.config['LEVERAGE'])
-                if "REVERSE" in action and position:
-                    logging.info("Reversing from SHORT to LONG")
-                    await self.exchange.flash_close_position(symbol)
-                position_value = self._calculate_position_value(
-                    current_balance)
-                await self.exchange.open_position(
-                    symbol, "buy", self.config['POSITION_SIZE'], self.config['STOP_LOSS_PERCENT']
-                )
-            elif action in ("OPEN_SHORT", "REVERSE_TO_SHORT"):
-                # Set exchange parameters before opening
-                await self.exchange.set_margin_mode(symbol, self.config['MARGIN_MODE'])
-                await self.exchange.set_leverage(symbol, self.config['LEVERAGE'])
-                if "REVERSE" in action and position:
-                    logging.info("Reversing from LONG to SHORT")
-                    await self.exchange.flash_close_position(symbol)
-                position_value = self._calculate_position_value(
-                    current_balance)
-                await self.exchange.open_position(
-                    symbol, "sell", self.config['POSITION_SIZE'], self.config['STOP_LOSS_PERCENT']
-                )
-            elif action == "CLOSE" and position:
-                logging.info("🔒 Closing position")
-                await self.exchange.flash_close_position(symbol)
-            else:
-                if position:
-                    # Calculate PnL for existing position
-                    current_price = await self.exchange.get_current_price(symbol)
-                    pnl = (current_price - position.entry_price) * \
-                        position.size
-                    pnl_pct = ((current_price - position.entry_price) /
-                               position.entry_price) * 100
-                    logging.info(
-                        f"⏸️ Holding {position.side} | PnL: ${pnl:+.2f} ({pnl_pct:+.2f}%)")
-                else:
-                    logging.info("💤 Staying flat")
-        except Exception as e:
-            logging.error(f"Trade failed: {e}")
+        self.logger = logging.getLogger("trade")
+        self.risk_manager = RiskManager(self.config, self.exchange)
+        self.current_position = None
+        self.last_trade_time = None
 
     async def run_cycle(self):
-        symbol = self.config['SYMBOL']
-        # Get market data (now includes both 24h and cycle volume)
+        """Run a single trading cycle: analyze market, get AI decision, execute trade if appropriate."""
         try:
-            price, change_pct, volume_24h, volume_cycle = await self._get_market_data(
-                symbol)
+            self.logger.info("Starting trading cycle")
+            print("DEBUG: Starting trading cycle")
+            
+            # Fetch market data
+            print("DEBUG: About to fetch OHLCV")
+            ohlcv = await self.exchange.get_ohlcv(
+                self.config['SYMBOL'],
+                timeframe=self.config['CYCLE_MINUTES'],
+                limit=100
+            )
+            print(f"DEBUG: OHLCV fetched, length: {len(ohlcv) if ohlcv else 0}")
+            if not ohlcv or len(ohlcv) < 50:
+                self.logger.warning("Insufficient market data")
+                return
+            
+            print("DEBUG: Creating DataFrame from OHLCV")
+            df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'].astype(int), unit='ms')
+            df.set_index('timestamp', inplace=True)
+            print("DEBUG: DataFrame created and indexed")
+            
+            # Calculate technical indicators
+            print("DEBUG: Calculating technical indicators")
+            df['rsi'] = ta.rsi(df['close'], length=14)
+            print("DEBUG: RSI calculated")
+            df['sma_20'] = ta.sma(df['close'], length=20)
+            print("DEBUG: SMA20 calculated")
+            df['sma_50'] = ta.sma(df['close'], length=50)
+            print("DEBUG: SMA50 calculated")
+            std20 = df['close'].rolling(window=20).std()
+            df['bb_middle'] = df['sma_20']
+            df['bb_upper'] = df['sma_20'] + (2 * std20)
+            df['bb_lower'] = df['sma_20'] - (2 * std20)
+            print("DEBUG: Bollinger Bands calculated")
+            df['ema_20'] = ta.ema(df['close'], length=20)
+            print("DEBUG: EMA20 calculated")
+            macd = ta.macd(df['close'])
+            df['MACD_hist'] = macd['MACDh_12_26_9']
+            df['MACD_signal'] = macd['MACDs_12_26_9']
+            print("DEBUG: MACD calculated")
+            
+            current_price = df['close'].iloc[-1]
+            latest_indicators = {
+                'rsi': df['rsi'].iloc[-1],
+                'sma_20': df['sma_20'].iloc[-1],
+                'sma_50': df['sma_50'].iloc[-1],
+                'bb_position': (current_price - df['bb_lower'].iloc[-1]) / (df['bb_upper'].iloc[-1] - df['bb_lower'].iloc[-1]) if df['bb_upper'].iloc[-1] != df['bb_lower'].iloc[-1] else 0.5,
+                'price': current_price,
+                'trend': 'bullish' if df['sma_20'].iloc[-1] > df['sma_50'].iloc[-1] else 'bearish',
+                'RSI': df['rsi'].iloc[-1],
+                'EMA_20': df['ema_20'].iloc[-1],
+                'BB_upper': df['bb_upper'].iloc[-1],
+                'BB_middle': df['bb_middle'].iloc[-1],
+                'BB_lower': df['bb_lower'].iloc[-1],
+                'MACD': {
+                    'hist': df['MACD_hist'].iloc[-1],
+                    'signal': df['MACD_signal'].iloc[-1]
+                }
+            }
+            print(f"DEBUG: Indicators ready, current price: {current_price}, trend: {latest_indicators['trend']}")
+            
+            # Get AI outlook
+            print("DEBUG: Preparing for AI prompt")
+            timestamp = datetime.now()
+            minutes_elapsed = 0
+            account_balance = self.config.get('INITIAL_CAPITAL', 10000)
+            equity = account_balance
+            open_positions = [self.current_position] if self.current_position else []
+            price_history_short = df.tail(20).reset_index().to_dict('records')
+            price_history_long = df.tail(50).reset_index().to_dict('records')
+            indicators = latest_indicators
+            predictive_signals = {}
+            print("DEBUG: Calling build_prompt")
+            prompt = build_prompt(
+                timestamp, minutes_elapsed, account_balance, equity, open_positions,
+                price_history_short, price_history_long, indicators, predictive_signals, self.config
+            )
+            print(f"DEBUG: Prompt built, length: {len(prompt)}")
+            
+            print("DEBUG: Calling send_request")
+            outlook = await send_request(prompt, self.config)
+            print(f"DEBUG: AI outlook received: {outlook}")
+            save_response(outlook, self.config['RUN_NAME'])
+            
+            # Parse AI outlook
+            print("DEBUG: Parsing AI outlook")
+            ai_decision = self._parse_ai_outlook(outlook)
+            print(f"DEBUG: AI decision: {ai_decision}")
+            
+            # Check risk management
+            print("DEBUG: Checking risk management")
+            if not await self.risk_manager.can_trade(ai_decision, current_price, self.current_position):
+                self.logger.info("Trade blocked by risk management")
+                return
+            
+            # Execute trade
+            if ai_decision['action'] != 'HOLD':
+                print("DEBUG: Executing trade")
+                await self._execute_trade(ai_decision, current_price)
+            
+            self.logger.info(f"Cycle completed. AI Decision: {ai_decision['action']}")
+            print("DEBUG: Cycle completed successfully")
+            
         except Exception as e:
-            logging.error(f"Market data error: {e}")
-            return
-        # Get AI analysis
-        outlook = await self._get_ai_analysis_with_timeout(
-            price, change_pct, volume_24h, volume_cycle, symbol)
-        interpretation = outlook.interpretation
-        save_response(outlook, self.config['RUN_NAME'])
-        # Get current position
-        position = await self.exchange.get_pending_positions(symbol)
-        current_side = position.side if position else "FLAT"
-        action = get_action(interpretation, current_side)
-        # Log decision with context
-        cycle_label = f"{self.config['CYCLE_MINUTES']}min"
-        if position:
-            current_price = await self.exchange.get_current_price(symbol)
-            pnl = (current_price - position.entry_price) * position.size
-            pnl_pct = ((current_price - position.entry_price) /
-                       position.entry_price) * 100
-            logging.info(
-                f"${price:,.0f} | Δ{change_pct:+.1f}% ({cycle_label}) | AI: {interpretation} | Pos: {current_side} (${pnl:+.0f}) → {action}")
+            print(f"DEBUG: Exception in run_cycle: {type(e).__name__}: {e}")
+            import traceback
+            print("DEBUG: Full traceback:")
+            traceback.print_exc()
+            self.logger.error(f"Error in run_cycle: {e}")
+            raise
+
+    def _parse_ai_outlook(self, outlook: AIOutlook) -> Dict[str, Any]:
+        """Parse AI outlook into actionable decision."""
+        action = outlook.action if outlook.action else ('BUY' if outlook.interpretation == 'Bullish' else 'SELL' if outlook.interpretation == 'Bearish' else 'HOLD')
+        confidence = 0.8 if action in ['BUY', 'SELL'] else 0.5 if action == 'HOLD' else 0.0
+        reason = outlook.reasons
+        return {'action': action, 'confidence': confidence, 'reason': reason}
+
+    async def _execute_trade(self, decision: Dict[str, Any], current_price: float):
+        """Execute a trade based on AI decision."""
+        try:
+            symbol = self.config['SYMBOL']
+            side = decision['action']
+            quantity = self._calculate_position_size(current_price)
+            
+            if quantity <= 0:
+                self.logger.warning("Calculated position size is zero or negative")
+                return
+            
+            # Place order
+            order = await self.exchange.place_order(
+                symbol=symbol,
+                side=side,
+                type='MARKET',
+                quantity=quantity,
+                leverage=self.config['LEVERAGE']
+            )
+            
+            if order['status'] == 'filled':
+                self.current_position = {
+                    'side': side,
+                    'quantity': quantity,
+                    'entry_price': current_price,
+                    'timestamp': datetime.now(),
+                    'stop_loss': self._calculate_stop_loss(side, current_price),
+                    'take_profit': self._calculate_take_profit(side, current_price)
+                }
+                self.last_trade_time = datetime.now()
+                self.logger.info(f"Trade executed: {side} {quantity} {symbol} at {current_price}")
+            else:
+                self.logger.error(f"Order failed: {order}")
+                
+        except Exception as e:
+            self.logger.error(f"Error executing trade: {e}")
+
+    def _calculate_position_size(self, price: float) -> float:
+        """Calculate position size based on config and risk."""
+        max_size_pct = self.config['MAX_POSITION_SIZE_PCT']
+        balance = self.config.get('INITIAL_CAPITAL', 10000)
+        position_value = balance * max_size_pct
+        quantity = position_value / price
+        return quantity * 0.01  # Adjust for precision, e.g., for BTC
+
+    def _calculate_stop_loss(self, side: str, entry_price: float) -> float:
+        """Calculate stop loss price."""
+        sl_pct = self.config['STOP_LOSS_PERCENT'] / 100
+        if side == 'BUY':
+            return entry_price * (1 - sl_pct)
         else:
-            logging.info(
-                f"${price:,.0f} | Δ{change_pct:+.1f}% ({cycle_label}) | AI: {interpretation} | Pos: {current_side} → {action}")
-        # Execute trade
-        await self._execute_trading_decision(action, symbol, position)
+            return entry_price * (1 + sl_pct)
+
+    def _calculate_take_profit(self, side: str, entry_price: float) -> float:
+        """Calculate take profit price."""
+        tp_pct = self.config.get('TAKE_PROFIT_PERCENT', 20) / 100
+        if side == 'BUY':
+            return entry_price * (1 + tp_pct)
+        else:
+            return entry_price * (1 - tp_pct)
+
+    async def monitor_positions(self):
+        """Monitor open positions and manage exits."""
+        if not self.current_position:
+            return
+        
+        try:
+            current_price = await self.exchange.get_ticker(self.config['SYMBOL'])
+            pos = self.current_position
+            side = pos['side']
+            
+            # Check stop loss / take profit
+            if side == 'BUY':
+                if current_price <= pos['stop_loss']:
+                    await self._close_position('SELL', current_price, "Stop Loss")
+                elif current_price >= pos['take_profit']:
+                    await self._close_position('SELL', current_price, "Take Profit")
+            else:
+                if current_price >= pos['stop_loss']:
+                    await self._close_position('BUY', current_price, "Stop Loss")
+                elif current_price <= pos['take_profit']:
+                    await self._close_position('BUY', current_price, "Take Profit")
+            
+            # Check max hold time
+            if self.last_trade_time and (datetime.now() - self.last_trade_time) > timedelta(hours=self.config['MAX_HOLD_HOURS']):
+                await self._close_position('CLOSE', current_price, "Max Hold Time")
+                
+        except Exception as e:
+            self.logger.error(f"Error monitoring position: {e}")
+
+    async def _close_position(self, side: str, price: float, reason: str):
+        """Close current position."""
+        if not self.current_position:
+            return
+        
+        try:
+            symbol = self.config['SYMBOL']
+            quantity = self.current_position['quantity']
+            
+            order = await self.exchange.place_order(
+                symbol=symbol,
+                side=side,
+                type='MARKET',
+                quantity=quantity,
+                leverage=self.config['LEVERAGE']
+            )
+            
+            if order['status'] == 'filled':
+                self.logger.info(f"Position closed: {reason} at {price}")
+                self.current_position = None
+                self.risk_manager.update_daily_pnl(order['pnl'])
+            else:
+                self.logger.error(f"Failed to close position: {order}")
+                
+        except Exception as e:
+            self.logger.error(f"Error closing position: {e}")

@@ -9,6 +9,7 @@ from pathlib import Path
 import signal
 from exchanges.forward_tester import ForwardTester
 from typing import Dict, Any
+from utils.logger import configure_logger
 
 sys.path.insert(0, str(Path(__file__).parent))
 load_dotenv()
@@ -97,6 +98,7 @@ def get_config() -> Dict[str, Any]:
 async def main():
     try:
         config = get_config()
+        configure_logger(config['RUN_NAME'])
         # Show configuration
         mode = "PAPER" if config['FORWARD_TESTING'] else "LIVE"
         print(f"Bitunix Futures Trader | {mode} | {config['LLM_PROVIDER']}")

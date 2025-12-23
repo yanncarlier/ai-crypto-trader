@@ -3,8 +3,6 @@ import json
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
-# Example type aliases for clarity (adjust based on your actual data structures)
-# e.g., [{'timestamp': '...', 'open': ..., 'high': ..., 'low': ..., 'close': ..., 'volume': ...}, ...]
 OHLCV = List[Dict[str, Any]]
 
 
@@ -22,125 +20,89 @@ def build_prompt(
     symbol: Optional[str] = None,
     currency: Optional[str] = None
 ) -> str:
-    """
-    Build a dynamic, recurring AI prompt for the trading loop.
-    This integrates comprehensive live market state data in structured format,
-    including timestamp, account details, multi-timeframe price history,
-    technical indicators, predictive signals, and a trading rules recap.
 
-    The response is structured as valid JSON for easy parsing.
-
-    Args:
-        timestamp: Current timestamp
-        minutes_elapsed: Minutes since the bot started
-        account_balance: Current account balance
-        equity: Current account equity
-        open_positions: List of open positions
-        price_history_short: Short-term price history (e.g., 10-minute candles)
-        price_history_long: Long-term price history (e.g., 40-hour candles)
-        indicators: Technical indicators
-        predictive_signals: Predictive market signals
-        config: Configuration dictionary
-        symbol: Optional symbol override
-        currency: Optional currency override
-    """
-    # Use config values with fallbacks
     symbol = symbol or config.get('SYMBOL', 'BTCUSDT')
     currency = currency or config.get('CURRENCY', 'USDT')
     crypto_name = config.get('CRYPTO', 'Bitcoin')
-    leverage = config.get('LEVERAGE', 2)
-    position_size = config.get('POSITION_SIZE', '10%')
-    stop_loss_pct = config.get('STOP_LOSS_PERCENT', 10)
-    take_profit_pct = config.get('TAKE_PROFIT_PERCENT')
-    # Convert to percentage for display
+    leverage = config.get('LEVERAGE', 8)
     taker_fee = config.get('TAKER_FEE', 0.0006) * 100
 
-    # Format open positions
+    # Open positions (compact)
     positions_str = "\n".join([
-        f"- {pos.get('side', 'Unknown')} {pos.get('size', 0)} {symbol} at entry ${pos.get('entry_price', 0):,.2f}, "
-        f"current PnL: ${pos.get('unrealized_pnl', 0):+.2f}"
+        f"- {pos.get('side', '?')} {pos.get('size', 0)} @ ${pos.get('entry_price', 0):,.0f} | PnL ${pos.get('unrealized_pnl', 0):+.0f}"
         for pos in open_positions
     ]) or "No open positions."
 
-    # Format price history
-    def format_ohlcv(history: OHLCV, timeframe: str, limit: int = 20) -> str:
-        lines = [
-            f"{timeframe} timeframe OHLCV (oldest to newest, last {limit} candles):"]
-        for candle in history[-limit:]:
-            ts = candle.get('timestamp', 'Unknown')
-            o, h, l, c, v = candle['open'], candle['high'], candle['low'], candle['close'], candle['volume']
+    # Compact OHLCV (last 15 candles instead of 20)
+    def format_ohlcv(history: OHLCV, timeframe: str, limit: int = 15) -> str:
+        lines = [f"{timeframe} OHLCV (last {limit}):"]
+        for c in history[-limit:]:
+            ts = c.get('timestamp', '?')
             lines.append(
-                f"- {ts}: O={o:,.2f}, H={h:,.2f}, L={l:,.2f}, C={c:,.2f}, V={v:,.0f}")
+                f"- {ts} | O={c['open']:,.1f} H={c['high']:,.1f} L={c['low']:,.1f} C={c['close']:,.1f}"
+            )
         return "\n".join(lines)
 
-    # Timeframes from config with fallback values
-    cycle_minutes = config.get('CYCLE_MINUTES', 10)
-    short_tf = f"{cycle_minutes}-minute"
-    long_tf = f"{cycle_minutes * 4}-hour"  # 4x cycle for long-term view
+    cycle_minutes = config.get('CYCLE_MINUTES', 1)
+    short_tf = f"{cycle_minutes}-min"
+    long_tf = f"{cycle_minutes * 4}-hour"
 
-    # Trading rules from config with fallback values
-    # Convert percentage to decimal
-    max_pos_size_pct = config.get('MAX_POSITION_SIZE_PCT', 0.1) * 100
-    daily_loss_pct = config.get('DAILY_LOSS_LIMIT_PCT', 0.02) * 100
-    max_drawdown_pct = config.get('MAX_DRAWDOWN_PCT', 0.05) * 100
-    max_hold_hours = config.get('MAX_HOLD_HOURS', 24)
+    # Risk config
+    max_pos_pct = config.get('MAX_POSITION_SIZE_PCT', 20)
+    daily_loss_pct = config.get('DAILY_LOSS_LIMIT_PCT', 5)
+    drawdown_pct = config.get('MAX_DRAWDOWN_PCT', 15)
+    max_hold_hours = config.get('MAX_HOLD_HOURS', 0.5)
 
     return f"""
-You are a top-level professional {crypto_name} trader focused on multiplying the account while strictly safeguarding capital through disciplined risk management.
+You are a professional {crypto_name} scalper: grow equity, preserve capital strictly.
 
-This analysis runs every {cycle_minutes} minute(s) during live trading.
+Cycle: every {cycle_minutes} min
 
-CURRENT MARKET STATE:
-- Timestamp: {timestamp.isoformat()}
-- Minutes elapsed since trading start:  {minutes_elapsed}
-- Account balance: ${account_balance:,.2f} {currency}
-- Current equity: ${equity:,.2f} {currency}
-- Open positions: {positions_str}
+STATE:
+- Time: {timestamp.isoformat()}
+- Equity: ${equity:,.0f} {currency}
+- Positions: {positions_str}
 
-PRICE HISTORY:
+PRICE:
 {format_ohlcv(price_history_short, short_tf)}
 {format_ohlcv(price_history_long, long_tf)}
 
-Technical Indicators:
-- RSI (14): {indicators.get('RSI', 'N/A')}
-- MACD: hist={indicators.get('MACD', {}).get('hist', 'N/A')}, signal={indicators.get('MACD', {}).get('signal', 'N/A')}
-- EMA 20: {indicators.get('EMA_20', 'N/A'):,.2f}
-- Bollinger Bands: upper={indicators.get('BB_upper', 'N/A'):,.2f}, middle={indicators.get('BB_middle', 'N/A'):,.2f}, lower={indicators.get('BB_lower', 'N/A'):,.2f}
+INDICATORS:
+- RSI(14): {indicators.get('RSI', 'N/A')}
+- MACD: hist {indicators.get('MACD', {}).get('hist', 'N/A')} | signal {indicators.get('MACD', {}).get('signal', 'N/A')}
+- EMA20: {indicators.get('EMA_20', 'N/A'):,.1f}
+- BB: U {indicators.get('BB_upper', 'N/A'):,.1f} | M {indicators.get('BB_middle', 'N/A'):,.1f} | L {indicators.get('BB_lower', 'N/A'):,.1f}
 
-Predictive Signals:
+SIGNALS:
 - Volatility: {predictive_signals.get('volatility', 'N/A')}
-- Order Book Depth: bid {predictive_signals.get('order_book_depth_bid', 'N/A')} {currency}, ask {predictive_signals.get('order_book_depth_ask', 'N/A')} {currency}
-- Sentiment: {predictive_signals.get('sentiment_proxy', 'Neutral')}  (you may override this with real-time data if using tools)
+- Order Book: bid {predictive_signals.get('order_book_depth_bid', 'N/A')} | ask {predictive_signals.get('order_book_depth_ask', 'N/A')}
+- Sentiment: {predictive_signals.get('sentiment_proxy', 'Neutral')} (override with tools if needed)
 
-
-Trading Rules (strictly follow):
-- Max risk per trade: 1% of equity
-- Max position size: {max_pos_size_pct*100:.0f}% of equity (at entry, including leverage)
-- Max daily loss: {daily_loss_pct*100:.0f}% of starting daily equity (stop trading if hit)
-- Max drawdown: {max_drawdown_pct*100:.0f}% from peak equity (stop trading if hit)
+RULES (strict):
+- Max risk/trade: 1% equity
+- Max position: {max_pos_pct}% equity
+- Daily loss limit: {daily_loss_pct}%
+- Max drawdown: {drawdown_pct}%
 - Leverage: {leverage}x
-- Default stop loss: 0.8% from entry price
-- Default take profit: 2.0% from entry price (R:R ≈ 2.5:1 after fees)
-- Taker fee: {taker_fee:.2f}%
-- Max hold time per trade: {max_hold_hours} hours
-- Prioritize capital preservation — only take high-probability setups aligned across timeframes
-- Volume data appears simulated/placeholder — do not base primary decisions on volume trends
+- Default SL: ~0.8% | TP: ~2.0%
+- Fee: {taker_fee:.2f}%
+- Max hold: {max_hold_hours}h
+- Volume simulated → ignore trends
+- Only enter on high-probability timeframe alignment
 
+TASK:
+Analyze {short_tf} vs {long_tf} trend alignment, price action, indicators, order book, sentiment.
+Use tools (web/X search) if real-time context adds value.
 
-Task:
-Analyze the current market across multiple timeframes. Identify short-term signals from the {short_tf} chart that align with the longer-term trend from the {long_tf} chart.
-Consider technical indicators, price action, order book imbalance, volatility, and sentiment.
-If using tools (e.g., web/X search), feel free to fetch real-time sentiment or news for {crypto_name}.
-
-Respond with valid JSON only — no markdown, no extra text, no explanations outside the JSON:
+Respond with valid JSON only — no text outside, no markdown:
 {{
   "interpretation": "Strong Bullish" | "Bullish" | "Neutral" | "Bearish" | "Strong Bearish",
   "confidence": 0.0 to 1.0,
-  "reasons": "Concise reasoning: timeframe alignment, key indicators, price action.",
+  "reasons": "Concise reasoning (max 80 words): key alignments, indicators, risk notes.",
   "action": "BUY" | "SELL" | "CLOSE_POSITION" | "HOLD" | "NO_TRADE",
-  "size_percent_of_equity": 0.0 to {max_pos_size_pct*100:.1f} (0.0 if no new trade; suggest 0.1–{max_pos_size_pct*100:.1f} only on high-confidence aligned setups),
-  "stop_loss_price": null | float (use ~0.8% from entry if suggesting trade),
-  "take_profit_price": null | float (use ~2.0% from entry if suggesting trade),
-  "additional_notes": "Brief notes: trailing stop ideas, alerts, or key levels to watch."
+  "size_percent_of_equity": 0.0 to {max_pos_pct:.0f} (0.0 = no trade; suggest only on high confidence),
+  "stop_loss_price": null | float,
+  "take_profit_price": null | float,
+  "additional_notes": "Brief: levels, trailing ideas, alerts."
 }}
 """.strip()

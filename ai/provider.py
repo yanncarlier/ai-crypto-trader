@@ -4,6 +4,7 @@ import json
 import logging
 from datetime import datetime
 from typing import Literal, Dict, Any, Optional
+from typing import Literal  # already there but ensure
 import httpx
 from pydantic import BaseModel, Field
 
@@ -21,6 +22,7 @@ PROVIDER_CONFIG = {
 class AIOutlook(BaseModel):
     interpretation: Literal["Bullish", "Bearish", "Neutral"]
     reasons: str = Field(min_length=1)
+    action: Optional[Literal["BUY", "SELL", "CLOSE_POSITION", "HOLD", "NO_TRADE"]] = None
 
 
 ...
@@ -61,6 +63,7 @@ async def send_request(prompt: str, config: Dict[str, Any], api_key: Optional[st
         "max_tokens": max_tokens,
         "messages": [{"role": "user", "content": prompt}],
     }
+    logging.getLogger('ai').info(f"=== PROMPT ===\n{prompt}\n=== END PROMPT ===")
     try:
         async with httpx.AsyncClient() as client:
             r = await client.post(url, headers=headers, json=payload, timeout=45)
@@ -75,6 +78,18 @@ async def send_request(prompt: str, config: Dict[str, Any], api_key: Optional[st
                 content = content[4:]
         try:
             parsed = json.loads(content)
+            if isinstance(parsed, dict) and "action" in parsed:
+                action = parsed["action"]
+                interp_map = {
+                    "BUY": "Bullish",
+                    "SELL": "Bearish",
+                    "HOLD": "Neutral",
+                    "NO_TRADE": "Neutral",
+                    "CLOSE_POSITION": "Neutral"
+                }
+                interp = interp_map.get(action, "Neutral")
+                reasons = f"AI action: {action}"
+                return AIOutlook(interpretation=interp, reasons=reasons, action=action)
             return AIOutlook(**parsed)
         except:
             # Fallback keyword detection
@@ -96,6 +111,6 @@ def save_response(outlook: AIOutlook, run_name: str) -> None:
     try:
         logging.getLogger('ai').info(
             f"🤖 AI Response: {outlook.interpretation}")
-        logging.getLogger('ai').info(f"   Reasons: {outlook.reasons[:200]}")
+        logging.getLogger('ai').info(f" : {outlook.reasons[:200]}")
     except Exception:
         pass

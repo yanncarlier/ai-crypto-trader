@@ -60,6 +60,8 @@ class BitunixFutures(BaseExchange):
             response = await client.get(url, params=params, timeout=TIMEOUT)
             response.raise_for_status()
             result = response.json()
+            if result is None:
+                raise Exception("Invalid JSON response from public API")
             if result.get("code") != 0:
                 raise Exception(
                     f"API Error {result.get('code')}: {result.get('msg')}")
@@ -76,6 +78,8 @@ class BitunixFutures(BaseExchange):
                                     params=params, timeout=TIMEOUT)
             response.raise_for_status()
             data = response.json()
+            if data is None:
+                raise Exception("Invalid JSON response from private GET API")
             if data.get("code") != 0:
                 logging.warning(f"Private GET API Error - Endpoint: {endpoint}, Params: {params}, Response: {data}")
                 raise Exception(f"API Error {data.get('code')}: {data.get('msg')}")
@@ -91,6 +95,8 @@ class BitunixFutures(BaseExchange):
                                      content=payload, timeout=TIMEOUT)
             response.raise_for_status()
             result = response.json()
+            if result is None:
+                raise Exception("Invalid JSON response from private POST API")
             if result.get("code") != 0:
                 logging.warning(f"Private POST API Error - Endpoint: {endpoint}, Data: {data}, Response: {result}")
                 raise Exception(
@@ -447,6 +453,8 @@ class BitunixFutures(BaseExchange):
     async def fetch_ohlcv(self, symbol: str, timeframe: str = "1m", limit: int = 15) -> list:
         data = await self._public_get(
             "/market/kline", {"symbol": symbol, "interval": timeframe, "limit": limit})
+        if data is None:
+            return []
         ohlcv = []
         for k in data:
             ohlcv.append([
@@ -458,3 +466,26 @@ class BitunixFutures(BaseExchange):
                 float(k["quoteVol"]),
             ])
         return ohlcv
+
+    async def get_ohlcv(self, symbol: str, timeframe: Any, limit: int) -> list:
+        tf_str = f"{int(timeframe)}m"
+        return await self.fetch_ohlcv(symbol, tf_str, limit)
+
+    async def get_ticker(self, symbol: str) -> float:
+        return await self.get_current_price(symbol)
+
+    async def place_order(self, symbol: str, side: str, type: str, quantity: float, leverage: Optional[int] = None) -> Dict[str, Any]:
+        if leverage is not None:
+            await self.set_leverage(symbol, leverage)
+        position = await self.get_pending_positions(symbol)
+        trade_side = "CLOSE" if position else "OPEN"
+        order_data = {
+            "symbol": symbol,
+            "qty": f"{quantity:.6f}",
+            "side": side.upper(),
+            "tradeSide": trade_side,
+            "orderType": type,
+            "marginCoin": "USDT",
+        }
+        order = await self._post("/trade/place_order", order_data)
+        return {"status": "filled", "orderId": order.get("orderId", "unknown") if order else "failed", "pnl": 0.0}
