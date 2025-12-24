@@ -101,8 +101,6 @@ Respond with valid JSON only — no text outside, no markdown:
   "reasons": "Concise reasoning (max 80 words): key alignments, indicators, risk notes.",
   "action": "BUY" | "SELL" | "CLOSE_POSITION" | "HOLD" | "NO_TRADE",
   "size_percent_of_equity": 0.0 to {max_pos_pct:.0f} (0.0 = no trade; suggest only on high confidence),
-  "stop_loss_price": null | float,
-  "take_profit_price": null | float,
   "additional_notes": "Brief: levels, trailing ideas, alerts."
 }}
 """.strip()

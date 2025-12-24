@@ -30,3 +30,21 @@ Warning: High leverage/position = high risk ruin. Backtest first. No "sure" prof
 
 ￼
 ￼
+__Logic issues with stop_loss_price/take_profit_price:__
+
+1. __AI suggestions ignored__: Prompt requests "stop_loss_price"/"take_profit_price" from AI, but trader.py `_parse_ai_outlook`/`_execute_trade` uses config % only (`_calculate_stop_loss`/`_calculate_take_profit`). AI values unused.
+
+2. __No SL/TP orders placed__: monitor_positions closes market on price hit, but no standing SL/TP orders (risk slippage/gap).
+
+3. __No override__: Config fixed % (0.5% SL), AI dynamic ignored (better for vol).
+
+__Consequences:__
+
+- Suboptimal levels (config generic).
+- Manual close risk (downtime/miss).
+
+__Recommend:__
+
+- Parse AI SL/TP in `_parse_ai_outlook`.
+- Use if provided, else config.
+- In place_order or separate, place SL/TP orders (bitunix supports STOP_MARKET/TAKE_PROFIT_MARKET).
