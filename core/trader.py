@@ -128,7 +128,7 @@ class TradingBot:
             # Check risk management
             # print("DEBUG: Checking risk management")
             if not await self.risk_manager.can_trade(ai_decision, current_price, self.current_position):
-                self.logger.info("Trade blocked by risk management")
+                self.logger.info(f"Trade blocked by risk management (action: {ai_decision['action']}, confidence: {ai_decision['confidence']:.2f})")
                 return
 
             # Execute trade
@@ -152,7 +152,8 @@ class TradingBot:
         """Parse AI outlook into actionable decision."""
         action = outlook.action if outlook.action else (
             'BUY' if outlook.interpretation == 'Bullish' else 'SELL' if outlook.interpretation == 'Bearish' else 'HOLD')
-        confidence = getattr(outlook, 'confidence', None) or (0.8 if action in ['BUY', 'SELL'] else 0.5 if action == 'HOLD' else 0.0)
+        confidence = getattr(outlook, 'confidence', None) or (
+            0.8 if action in ['BUY', 'SELL'] else 0.5 if action == 'HOLD' else 0.0)
         reason = outlook.reasons
         return {'action': action, 'confidence': confidence, 'reason': reason}
 
