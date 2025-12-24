@@ -98,9 +98,7 @@ Respond with valid JSON only — no text outside, no markdown:
 {{
   "interpretation": "Strong Bullish" | "Bullish" | "Neutral" | "Bearish" | "Strong Bearish",
   "confidence": 0.0 to 1.0,
-  "reasons": "Concise reasoning (max 80 words): key alignments, indicators, risk notes.",
   "action": "BUY" | "SELL" | "CLOSE_POSITION" | "HOLD" | "NO_TRADE",
-  "size_percent_of_equity": 0.0 to {max_pos_pct:.0f} (0.0 = no trade; suggest only on high confidence),
-  "additional_notes": "Brief: levels, trailing ideas, alerts."
+  "size_percent_of_equity": 0.0 to {max_pos_pct:.0f} (0.0 = no trade; suggest only on high confidence)
 }}
 """.strip()
