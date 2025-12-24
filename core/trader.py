@@ -129,7 +129,7 @@ class TradingBot:
             # print("DEBUG: Checking risk management")
             if not await self.risk_manager.can_trade(ai_decision, current_price, self.current_position):
                 self.logger.info(
-                    f"Trade blocked by risk management (action: {ai_decision['action']}, confidence: {ai_decision['confidence']:.2f})")
+                    f"Action: {ai_decision['action']}, confidence: {ai_decision['confidence']:.2f}")
                 return
 
             # Execute trade
