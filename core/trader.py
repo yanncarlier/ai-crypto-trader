@@ -33,7 +33,6 @@ class TradingBot:
     async def run_cycle(self):
         """Run a single trading cycle: analyze market, get AI decision, execute trade if appropriate."""
         try:
-            self.logger.info("Starting trading cycle")
             print("DEBUG: Starting trading cycle")
 
             # Fetch market data
