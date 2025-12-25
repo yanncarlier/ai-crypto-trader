@@ -29,13 +29,22 @@ class TradingBot:
         self.risk_manager = RiskManager(self.config, self.exchange)
         self.current_position = None
         self.last_trade_time = None
+        self.start_time = datetime.now()
 
     async def _update_position_from_exchange(self):
         """Update local position state from exchange."""
         position = await self.exchange.get_pending_positions(self.config['SYMBOL'])
         if position:
-            # Convert timestamp to datetime if it's in milliseconds
-            timestamp = datetime.fromtimestamp(position.timestamp/1000) if position.timestamp else datetime.now()
+            # Convert timestamp to datetime, handling both seconds and milliseconds
+            if position.timestamp:
+                # If timestamp is in milliseconds (typical for exchanges), convert by dividing by 1000
+                # If it's already in seconds, then dividing by 1000 would be wrong. We'll assume milliseconds if > 1e10
+                if position.timestamp > 1e10:  # Likely milliseconds
+                    timestamp = datetime.fromtimestamp(position.timestamp / 1000)
+                else:
+                    timestamp = datetime.fromtimestamp(position.timestamp)
+            else:
+                timestamp = datetime.now()
             self.current_position = {
                 'side': position.side,
                 'quantity': position.size,
@@ -123,9 +132,13 @@ class TradingBot:
             # Get AI outlook
             # print("DEBUG: Preparing for AI prompt")
             timestamp = datetime.now()
-            minutes_elapsed = 0
-            account_balance = self.config.get('INITIAL_CAPITAL', 10000)
-            equity = account_balance
+            minutes_elapsed = int((datetime.now() - self.start_time).total_seconds() // 60)
+            try:
+                account_balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
+            except Exception as e:
+                self.logger.warning(f"Failed to fetch account balance: {e}, using INITIAL_CAPITAL")
+                account_balance = self.config.get('INITIAL_CAPITAL', 10000)
+            equity = account_balance  # TODO: include unrealized PnL if any
             open_positions = [
                 self.current_position] if self.current_position else []
             price_history_short = df.tail(20).reset_index().to_dict('records')
@@ -175,10 +188,24 @@ class TradingBot:
 
     def _parse_ai_outlook(self, outlook: AIOutlook) -> Dict[str, Any]:
         """Parse AI outlook into actionable decision."""
-        action = outlook.action if outlook.action else (
-            'BUY' if outlook.interpretation == 'Bullish' else 'SELL' if outlook.interpretation == 'Bearish' else 'HOLD')
-        confidence = getattr(outlook, 'confidence', None) or (
-            0.8 if action in ['BUY', 'SELL'] else 0.5 if action == 'HOLD' else 0.0)
+        # Use the action provided by the AI, or map interpretation to action if action is not provided
+        if outlook.action and outlook.action in ['BUY', 'SELL', 'CLOSE_POSITION', 'HOLD', 'NO_TRADE']:
+            action = outlook.action
+        else:
+            # Map interpretation to action, default to HOLD if unknown
+            if outlook.interpretation == 'Bullish':
+                action = 'BUY'
+            elif outlook.interpretation == 'Bearish':
+                action = 'SELL'
+            else:
+                action = 'HOLD'
+        
+        # Use provided confidence, or set defaults based on action
+        if outlook.confidence is not None and 0 <= outlook.confidence <= 1:
+            confidence = outlook.confidence
+        else:
+            confidence = 0.8 if action in ['BUY', 'SELL'] else 0.5
+        
         reason = outlook.reasons
         return {'action': action, 'confidence': confidence, 'reason': reason}
 
@@ -187,7 +214,7 @@ class TradingBot:
         try:
             symbol = self.config['SYMBOL']
             side = decision['action']
-            quantity = self._calculate_position_size(current_price)
+            quantity = await self._calculate_position_size(current_price)
 
             if quantity <= 0:
                 self.logger.warning(
@@ -216,7 +243,6 @@ class TradingBot:
                 self.logger.info(
                     f"Trade executed: {side} {quantity} {symbol} at {current_price}")
                 balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
-                balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
                 trade = {
                     'timestamp': int(datetime.now().timestamp() * 1000),
                     'side': side,
@@ -232,10 +258,14 @@ class TradingBot:
         except Exception as e:
             self.logger.error(f"Error executing trade: {e}")
 
-    def _calculate_position_size(self, price: float) -> float:
+    async def _calculate_position_size(self, price: float) -> float:
         """Calculate position size based on config and risk."""
+        try:
+            balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
+        except Exception as e:
+            self.logger.warning(f"Failed to fetch account balance for position sizing: {e}, using INITIAL_CAPITAL")
+            balance = self.config.get('INITIAL_CAPITAL', 10000)
         max_size_pct = self.config['MAX_POSITION_SIZE_PCT']
-        balance = self.config.get('INITIAL_CAPITAL', 10000)
         position_value = balance * max_size_pct
         quantity = position_value / price
         return quantity  # Raw qty from % equity
@@ -279,8 +309,11 @@ class TradingBot:
                     await self._close_position('BUY', current_price, "Take Profit")
 
             # Check max hold time
-            if self.last_trade_time and (datetime.now() - self.last_trade_time) > timedelta(hours=self.config['MAX_HOLD_HOURS']):
-                await self._close_position('CLOSE', current_price, "Max Hold Time")
+            if self.last_trade_time:
+                if (datetime.now() - self.last_trade_time) > timedelta(hours=self.config['MAX_HOLD_HOURS']):
+                    # Determine correct side to close: opposite of current position side
+                    close_side = 'SELL' if side == 'BUY' else 'BUY'
+                    await self._close_position(close_side, current_price, "Max Hold Time")
 
         except Exception as e:
             self.logger.error(f"Error monitoring position: {e}")
@@ -306,13 +339,19 @@ class TradingBot:
                 self.logger.info(f"Position closed: {reason} at {price}")
                 self.current_position = None
                 self.risk_manager.update_daily_pnl(order['pnl'])
+                # Fetch current balance for trade record
+                try:
+                    balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
+                except Exception as e:
+                    self.logger.warning(f"Failed to fetch account balance for trade record: {e}")
+                    balance = self.config.get('INITIAL_CAPITAL', 10000.0)
                 trade = {
                     'timestamp': int(datetime.now().timestamp() * 1000),
                     'side': side,
                     'quantity': quantity,
                     'price': price,
                     'pnl': order.get('pnl', 0.0),
-                    'balance': self.config.get('INITIAL_CAPITAL', 10000.0)
+                    'balance': balance
                 }
                 self.risk_manager.update_trade_history(trade)
             else:

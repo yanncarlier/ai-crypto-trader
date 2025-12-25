@@ -72,27 +72,72 @@ async def send_request(prompt: str, config: Dict[str, Any], api_key: Optional[st
         data = r.json()
         content = data["choices"][0]["message"]["content"].strip()
         logging.getLogger('ai').info(f"Raw AI content: {content}")
-        # Try to parse JSON
-        if content.startswith("```"):
-            content = content.split("```", 2)[1]
-            if content.startswith("json"):
-                content = content[4:]
+        # Try to parse JSON, handling markdown code fences more robustly
+        import re
+        # Remove markdown code fences (```json ... ```) possibly with language specifier
+        content = re.sub(r'^```[a-z]*\n', '', content, flags=re.MULTILINE)
+        content = re.sub(r'\n```$', '', content, flags=re.MULTILINE)
+        content = content.strip()
         try:
             parsed = json.loads(content)
-            if isinstance(parsed, dict) and "action" in parsed:
-                action = parsed["action"]
-                interp_map = {
-                    "BUY": "Bullish",
-                    "SELL": "Bearish",
-                    "HOLD": "Neutral",
-                    "NO_TRADE": "Neutral",
-                    "CLOSE_POSITION": "Neutral"
-                }
-                interp = interp_map.get(action, "Neutral")
-                reasons = f"AI action: {action}"
-                return AIOutlook(interpretation=interp, reasons=reasons, action=action, confidence=parsed.get('confidence', 0.5))
-            return AIOutlook(**parsed)
-        except:
+            if isinstance(parsed, dict):
+                # Extract fields with fallbacks
+                action = parsed.get('action')
+                interpretation = parsed.get('interpretation')
+                confidence = parsed.get('confidence')
+                reasons = parsed.get('reasons', '')
+                
+                # If interpretation not provided, infer from action if possible
+                if not interpretation and action:
+                    interp_map = {
+                        "BUY": "Bullish",
+                        "SELL": "Bearish",
+                        "HOLD": "Neutral",
+                        "NO_TRADE": "Neutral",
+                        "CLOSE_POSITION": "Neutral"
+                    }
+                    interpretation = interp_map.get(action, "Neutral")
+                elif not interpretation:
+                    interpretation = "Neutral"
+                    
+                # Validate interpretation matches allowed values
+                if interpretation not in ["Bullish", "Bearish", "Neutral"]:
+                    # Map similar strings
+                    interpretation_lower = interpretation.lower()
+                    if "bull" in interpretation_lower:
+                        interpretation = "Bullish"
+                    elif "bear" in interpretation_lower:
+                        interpretation = "Bearish"
+                    else:
+                        interpretation = "Neutral"
+                
+                # Ensure confidence is within bounds
+                if confidence is not None:
+                    try:
+                        confidence = float(confidence)
+                        if confidence < 0.0:
+                            confidence = 0.0
+                        elif confidence > 1.0:
+                            confidence = 1.0
+                    except (ValueError, TypeError):
+                        confidence = 0.5
+                else:
+                    confidence = 0.5
+                    
+                # Use provided reasons or default
+                if not reasons:
+                    reasons = f"AI decision: {action if action else interpretation}"
+                    
+                return AIOutlook(
+                    interpretation=interpretation,
+                    reasons=reasons[:500],  # Limit length
+                    action=action,
+                    confidence=confidence
+                )
+            # If parsed is not a dict, fall through to keyword detection
+            raise ValueError("Parsed JSON is not a dictionary")
+        except Exception as parse_error:
+            logging.getLogger('ai').warning(f"JSON parsing failed: {parse_error}, falling back to keyword detection")
             # Fallback keyword detection
             text = content.lower()
             if "bullish" in text and "bearish" not in text:
