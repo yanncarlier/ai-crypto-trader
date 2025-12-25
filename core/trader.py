@@ -30,10 +30,34 @@ class TradingBot:
         self.current_position = None
         self.last_trade_time = None
 
+    async def _update_position_from_exchange(self):
+        """Update local position state from exchange."""
+        position = await self.exchange.get_pending_positions(self.config['SYMBOL'])
+        if position:
+            # Convert timestamp to datetime if it's in milliseconds
+            timestamp = datetime.fromtimestamp(position.timestamp/1000) if position.timestamp else datetime.now()
+            self.current_position = {
+                'side': position.side,
+                'quantity': position.size,
+                'entry_price': position.entry_price,
+                'timestamp': timestamp,
+                'stop_loss': self._calculate_stop_loss(position.side, position.entry_price),
+                'take_profit': self._calculate_take_profit(position.side, position.entry_price)
+            }
+            self.last_trade_time = timestamp
+        else:
+            self.current_position = None
+            self.last_trade_time = None
+
     async def run_cycle(self):
         """Run a single trading cycle: analyze market, get AI decision, execute trade if appropriate."""
         try:
             print("DEBUG: Starting trading cycle")
+
+            # Update local position state from exchange
+            await self._update_position_from_exchange()
+            # Monitor current position for SL/TP/hold time
+            await self.monitor_positions()
 
             # Fetch market data
             # print("DEBUG: About to fetch OHLCV")
