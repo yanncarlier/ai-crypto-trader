@@ -409,7 +409,7 @@ class BitunixFutures(BaseExchange):
             
             logging.info(f"✅ Closed {position.side} {position.size:.4f} {position.symbol} @ "
                        f"${current_price:,.2f} | PnL: ${pnl:,.2f} ({reason})")
-            return order
+            return {'order': order, 'pnl': pnl}
             
         except Exception as e:
             logging.error(f"❌ Error closing position: {e}")

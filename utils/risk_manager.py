@@ -8,21 +8,30 @@ import time
 
 @dataclass
 class RiskParameters:
-    max_position_size_pct: float = 0.1  # 10% of account per trade
-    daily_loss_limit_pct: float = 0.02  # 2% daily loss limit
-    max_drawdown_pct: float = 0.05  # 5% max drawdown per trade
-    max_hold_period_hours: int = 24  # Close positions after 24 hours
-    volatility_adjusted: bool = True  # Adjust position size based on volatility
-    atr_period: int = 14  # ATR period for volatility calculation
-    max_leverage: int = 5  # Maximum allowed leverage
-    min_liquidity: float = 1000000  # Minimum 24h volume in USDT
+    max_position_size_pct: float
+    daily_loss_limit_pct: float
+    max_drawdown_pct: float
+    max_hold_period_hours: int
+    volatility_adjusted: bool
+    atr_period: int
+    max_leverage: int
+    min_liquidity: float
 
 
 class RiskManager:
     def __init__(self, config, exchange):
         self.config = config
         self.exchange = exchange
-        self.risk_params = RiskParameters()
+        self.risk_params = RiskParameters(
+            max_position_size_pct=config['MAX_POSITION_SIZE_PCT'] / 100,
+            daily_loss_limit_pct=config['DAILY_LOSS_LIMIT_PCT'] / 100,
+            max_drawdown_pct=config['MAX_DRAWDOWN_PCT'] / 100,
+            max_hold_period_hours=config['MAX_HOLD_HOURS'],
+            volatility_adjusted=config.get('VOLATILITY_ADJUSTED', True),
+            atr_period=config.get('ATR_PERIOD', 14),
+            max_leverage=config['LEVERAGE'],
+            min_liquidity=config.get('MIN_LIQUIDITY', 1000000)
+        )
         self.trade_history: List[Dict] = []
         self.daily_pnl: Dict[str, float] = {}
 
@@ -119,8 +128,7 @@ class RiskManager:
             # Check daily loss limit
             today = pd.Timestamp.utcnow().strftime('%Y-%m-%d')
             if today in self.daily_pnl and self.daily_pnl[today] < 0:
-                max_daily_loss = self.config['DAILY_LOSS_LIMIT_PCT'] * \
-                    self.config['INITIAL_CAPITAL']
+                max_daily_loss = balance * self.config['DAILY_LOSS_LIMIT_PCT']
                 if abs(self.daily_pnl[today]) >= max_daily_loss:
                     return False, f"Daily loss limit reached: {self.daily_pnl[today]:.2f} {self.config['CURRENCY']}"
 
@@ -158,8 +166,8 @@ class RiskManager:
                 return False
 
             # Check position size feasibility
-            proposed_size = decision.get(
-                'quantity', current_price * self.config['MAX_POSITION_SIZE_PCT'])
+            balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
+            proposed_size = (balance * self.config['MAX_POSITION_SIZE_PCT']) / current_price
             adjusted_size, details = await self.calculate_position_size(self.config['SYMBOL'], current_price, proposed_size)
             if adjusted_size <= 0:
                 logging.warning("Adjusted position size is zero")
@@ -176,16 +184,6 @@ class RiskManager:
         self.daily_pnl[today] = self.daily_pnl.get(today, 0) + pnl
         logging.info(
             f"Updated daily PnL: {pnl}, total for today: {self.daily_pnl[today]}")
-
-    def update_trade_history(self, trade: Dict):
-        """Update trade history for performance analysis"""
-        self.trade_history.append(trade)
-
-        # Update daily PnL
-        trade_date = pd.to_datetime(
-            trade['timestamp'], unit='ms').strftime('%Y-%m-%d')
-        self.daily_pnl[trade_date] = self.daily_pnl.get(
-            trade_date, 0) + trade.get('pnl', 0)
 
     def get_risk_metrics(self) -> Dict:
         """Calculate risk metrics"""

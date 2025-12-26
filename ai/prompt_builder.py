@@ -21,11 +21,11 @@ def build_prompt(
     currency: Optional[str] = None
 ) -> str:
 
-    symbol = symbol or config.get('SYMBOL', 'BTCUSDT')
-    currency = currency or config.get('CURRENCY', 'USDT')
-    crypto_name = config.get('CRYPTO', 'Bitcoin')
-    leverage = config.get('LEVERAGE', 8)
-    taker_fee = config.get('TAKER_FEE', 0.0006) * 100
+    symbol = symbol or config['SYMBOL']
+    currency = currency or config['CURRENCY']
+    crypto_name = config['CRYPTO']
+    leverage = config['LEVERAGE']
+    taker_fee = config['TAKER_FEE'] * 100
 
     # Open positions (compact)
     positions_str = "\n".join([
@@ -43,15 +43,15 @@ def build_prompt(
             )
         return "\n".join(lines)
 
-    cycle_minutes = config.get('CYCLE_MINUTES', 1)
+    cycle_minutes = config['CYCLE_MINUTES']
     short_tf = f"{cycle_minutes}-min"
     long_tf = f"{cycle_minutes * 4}-hour"
 
     # Risk config
-    max_pos_pct = config.get('MAX_POSITION_SIZE_PCT', 20)
-    daily_loss_pct = config.get('DAILY_LOSS_LIMIT_PCT', 5)
-    drawdown_pct = config.get('MAX_DRAWDOWN_PCT', 15)
-    max_hold_hours = config.get('MAX_HOLD_HOURS', 0.5)
+    max_pos_pct = config['MAX_POSITION_SIZE_PCT']
+    daily_loss_pct = config['DAILY_LOSS_LIMIT_PCT']
+    drawdown_pct = config['MAX_DRAWDOWN_PCT']
+    max_hold_hours = config['MAX_HOLD_HOURS']
 
     return f"""
 You are a professional {crypto_name} scalper: grow equity, preserve capital strictly.

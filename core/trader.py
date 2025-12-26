@@ -137,7 +137,7 @@ class TradingBot:
                 account_balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
             except Exception as e:
                 self.logger.warning(f"Failed to fetch account balance: {e}, using INITIAL_CAPITAL")
-                account_balance = self.config.get('INITIAL_CAPITAL', 10000)
+                account_balance = self.config['INITIAL_CAPITAL']
             equity = account_balance  # TODO: include unrealized PnL if any
             open_positions = [
                 self.current_position] if self.current_position else []
@@ -222,8 +222,8 @@ class TradingBot:
                 return
 
             # Place order using open_position with stop loss and take profit
-            sl_pct = self.config.get('STOP_LOSS_PERCENT', 5)
-            tp_pct = self.config.get('TAKE_PROFIT_PERCENT', 20)
+            sl_pct = self.config['STOP_LOSS_PERCENT']
+            tp_pct = self.config['TAKE_PROFIT_PERCENT']
             
             order = await self.exchange.open_position(
                 symbol=symbol,
@@ -267,13 +267,13 @@ class TradingBot:
             balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
         except Exception as e:
             self.logger.warning(f"Failed to fetch account balance for position sizing: {e}, using INITIAL_CAPITAL")
-            balance = self.config.get('INITIAL_CAPITAL', 401)  # Use actual balance from env
+            balance = self.config['INITIAL_CAPITAL']  # Use actual balance from env
         max_size_pct = self.config['MAX_POSITION_SIZE_PCT']  # Already a decimal from config
         position_value = balance * max_size_pct
         quantity = position_value / price
         
         # Ensure minimum position size and avoid tiny positions
-        min_quantity = 0.005  # Minimum 0.005 BTC or equivalent (to meet exchange minimum)
+        min_quantity = self.config['MIN_POSITION_SIZE']
         quantity = max(quantity, min_quantity)
         
         # Round to 4 decimal places for precision, but ensure minimum
@@ -294,7 +294,7 @@ class TradingBot:
 
     def _calculate_take_profit(self, side: str, entry_price: float) -> float:
         """Calculate take profit price."""
-        tp_pct = self.config.get('TAKE_PROFIT_PERCENT', 20) / 100
+        tp_pct = self.config['TAKE_PROFIT_PERCENT'] / 100
         if side == 'BUY':
             return entry_price * (1 + tp_pct)
         else:
@@ -349,24 +349,25 @@ class TradingBot:
                 return
 
             # Use the proper close_position method
-            order = await self.exchange.close_position(position, reason)
+            result = await self.exchange.close_position(position, reason)
+            pnl = result.get('pnl', 0.0)
 
-            if order:
+            if result.get('order'):
                 self.logger.info(f"Position closed: {reason} at {price}")
                 self.current_position = None
-                self.risk_manager.update_daily_pnl(0.0)  # PnL is calculated in close_position method
+                self.risk_manager.update_daily_pnl(pnl)
                 # Fetch current balance for trade record
                 try:
                     balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
                 except Exception as e:
                     self.logger.warning(f"Failed to fetch account balance for trade record: {e}")
-                    balance = self.config.get('INITIAL_CAPITAL', 10000.0)
+                    balance = self.config['INITIAL_CAPITAL']
                 trade = {
                     'timestamp': int(datetime.now().timestamp() * 1000),
                     'side': side,
                     'quantity': quantity,
                     'price': price,
-                    'pnl': 0.0,  # PnL is tracked in the exchange close_position method
+                    'pnl': pnl,
                     'balance': balance
                 }
                 self.risk_manager.update_trade_history(trade)
