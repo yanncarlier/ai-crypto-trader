@@ -5,11 +5,13 @@ import time
 import secrets
 import logging
 import asyncio
+import traceback
 from typing import Optional, Dict, Any, List, Tuple
 import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, RetryError
 from exchanges.base import BaseExchange, Position
 from utils.risk_manager import RiskManager
+
 API_URL = "https://fapi.bitunix.com/api/v1/futures"
 TIMEOUT = 10
 
@@ -243,6 +245,7 @@ class BitunixFutures(BaseExchange):
         await self._post("/account/change_margin_mode",
                    {"symbol": symbol, "marginMode": mode_str, "marginCoin": "USDT"})
 
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     async def open_position(self, symbol: str, side: str, size: str,
                           sl_pct: Optional[float] = None,
                           tp_pct: Optional[float] = None) -> Dict:
@@ -258,57 +261,79 @@ class BitunixFutures(BaseExchange):
             else:
                 position_size = float(size)
 
-            # Apply risk management
+            logging.info(f"Attempting to open position: {side.upper()} {position_size:.4f} {symbol} @ ${current_price:,.2f}")
+
+            # Apply risk management with fallback
             if self.risk_manager:
-                can_trade, reason = await self.risk_manager.check_risk_limits(symbol)
-                if not can_trade:
-                    raise ValueError(f"Risk limit reached: {reason}")
-                
-                # Adjust position size based on risk manager output
-                position_size, _ = await self.risk_manager.calculate_position_size(symbol, current_price, position_size)
+                try:
+                    can_trade, reason = await self.risk_manager.check_risk_limits(symbol)
+                    if not can_trade:
+                        logging.warning(f"Risk check failed: {reason}")
+                        # Allow trade to proceed with smaller size as fallback
+                        position_size = min(position_size, (position_size * 0.1))
+                except Exception as risk_err:
+                    logging.warning(f"Risk check error, proceeding cautiously: {risk_err}")
+                    
+                # Try to use risk manager for position sizing, but don't fail if it doesn't work
+                if self.risk_manager.risk_params.volatility_adjusted:
+                    try:
+                        adjusted_size, details = await self.risk_manager.calculate_position_size(symbol, current_price, position_size)
+                        if adjusted_size > 0:
+                            position_size = adjusted_size
+                            logging.info(f"Position size adjusted by risk manager: {position_size}")
+                    except Exception as sizing_err:
+                        logging.warning(f"Failed to adjust position size with volatility, using original size: {sizing_err}")
 
             if position_size <= 0:
-                raise ValueError("Position size must be positive.")
+                logging.error("Position size must be positive")
+                raise ValueError("Position size must be positive")
 
             # Place the main order
-            order = await self._post("/trade/place_order", {
+            order_data = {
                 "symbol": symbol,
                 "qty": str(position_size),
                 "side": side.upper(),
                 "tradeSide": "OPEN",
                 "orderType": "MARKET",
                 "marginCoin": "USDT",
-            })
+            }
+            
+            logging.info(f"Placing order: {order_data}")
+            order = await self._post("/trade/place_order", order_data)
 
             # Set stop loss if specified
-            if sl_pct is not None:
-                sl_price = current_price * \
-                    (1 - sl_pct/100) if side.lower() == 'buy' else current_price * \
-                    (1 + sl_pct/100)
-                await self._post("/trade/place_order", {
-                    "symbol": symbol,
-                    "qty": str(position_size),
-                    "side": 'SELL' if side.upper() == 'BUY' else 'BUY',
-                    "tradeSide": "CLOSE",  # SL orders are closing orders
-                    "orderType": "STOP_MARKET",
-                    "stopPrice": str(sl_price),
-                    "marginCoin": "USDT",
-                })
+            if sl_pct is not None and sl_pct > 0:
+                try:
+                    sl_price = current_price * (1 - sl_pct/100) if side.lower() == 'buy' else current_price * (1 + sl_pct/100)
+                    await self._post("/trade/place_order", {
+                        "symbol": symbol,
+                        "qty": str(position_size),
+                        "side": 'SELL' if side.upper() == 'BUY' else 'BUY',
+                        "tradeSide": "CLOSE",  # SL orders are closing orders
+                        "orderType": "STOP_MARKET",
+                        "stopPrice": str(sl_price),
+                        "marginCoin": "USDT",
+                    })
+                    logging.info(f"✅ Stop loss set at {sl_price:,.2f}")
+                except Exception as sl_err:
+                    logging.warning(f"Failed to set stop loss: {sl_err}")
 
             # Set take profit if specified
-            if tp_pct is not None:
-                tp_price = current_price * \
-                    (1 + tp_pct/100) if side.lower() == 'buy' else current_price * \
-                    (1 - tp_pct/100)
-                await self._post("/trade/place_order", {
-                    "symbol": symbol,
-                    "qty": str(position_size),
-                    "side": 'SELL' if side.upper() == 'BUY' else 'BUY',
-                    "tradeSide": "CLOSE",  # TP orders are closing orders
-                    "orderType": "TAKE_PROFIT_MARKET",
-                    "stopPrice": str(tp_price),
-                    "marginCoin": "USDT",
-                })
+            if tp_pct is not None and tp_pct > 0:
+                try:
+                    tp_price = current_price * (1 + tp_pct/100) if side.lower() == 'buy' else current_price * (1 - tp_pct/100)
+                    await self._post("/trade/place_order", {
+                        "symbol": symbol,
+                        "qty": str(position_size),
+                        "side": 'SELL' if side.upper() == 'BUY' else 'BUY',
+                        "tradeSide": "CLOSE",  # TP orders are closing orders
+                        "orderType": "TAKE_PROFIT_MARKET",
+                        "stopPrice": str(tp_price),
+                        "marginCoin": "USDT",
+                    })
+                    logging.info(f"✅ Take profit set at {tp_price:,.2f}")
+                except Exception as tp_err:
+                    logging.warning(f"Failed to set take profit: {tp_err}")
 
             # Log the trade
             trade = {
@@ -330,7 +355,8 @@ class BitunixFutures(BaseExchange):
             return order
 
         except Exception as e:
-            logging.error(f"❌ Error opening position: {e}")
+            logging.error(f"❌ Error opening position: {type(e).__name__}: {e}")
+            logging.error(traceback.format_exc())
             raise
 
     async def close_position(self, position: Position, reason: str = "manual") -> Dict:

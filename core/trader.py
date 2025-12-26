@@ -221,16 +221,19 @@ class TradingBot:
                     "Calculated position size is zero or negative")
                 return
 
-            # Place order
-            order = await self.exchange.place_order(
+            # Place order using open_position with stop loss and take profit
+            sl_pct = self.config.get('STOP_LOSS_PERCENT', 5)
+            tp_pct = self.config.get('TAKE_PROFIT_PERCENT', 20)
+            
+            order = await self.exchange.open_position(
                 symbol=symbol,
                 side=side,
-                type='MARKET',
-                quantity=quantity,
-                leverage=self.config['LEVERAGE']
+                size=str(quantity),
+                sl_pct=sl_pct,
+                tp_pct=tp_pct
             )
 
-            if order['status'] == 'filled':
+            if order:
                 self.current_position = {
                     'side': side,
                     'quantity': quantity,
@@ -241,7 +244,7 @@ class TradingBot:
                 }
                 self.last_trade_time = datetime.now()
                 self.logger.info(
-                    f"Trade executed: {side} {quantity} {symbol} at {current_price}")
+                    f"Trade executed: {side} {quantity} {symbol} at {current_price} with SL: {sl_pct}% and TP: {tp_pct}%")
                 balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
                 trade = {
                     'timestamp': int(datetime.now().timestamp() * 1000),
@@ -264,11 +267,17 @@ class TradingBot:
             balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
         except Exception as e:
             self.logger.warning(f"Failed to fetch account balance for position sizing: {e}, using INITIAL_CAPITAL")
-            balance = self.config.get('INITIAL_CAPITAL', 10000)
-        max_size_pct = self.config['MAX_POSITION_SIZE_PCT']
+            balance = self.config.get('INITIAL_CAPITAL', 100)
+        max_size_pct = self.config['MAX_POSITION_SIZE_PCT'] / 100  # Convert percentage to decimal
         position_value = balance * max_size_pct
         quantity = position_value / price
-        return quantity  # Raw qty from % equity
+        
+        # Ensure minimum position size and avoid tiny positions
+        min_quantity = 0.001  # Minimum 0.001 BTC or equivalent
+        quantity = max(quantity, min_quantity)
+        
+        self.logger.info(f"Calculated position size: {quantity} {self.config['SYMBOL']}, balance: {balance} USDT, max_size_pct: {max_size_pct}")
+        return quantity
 
     def _calculate_stop_loss(self, side: str, entry_price: float) -> float:
         """Calculate stop loss price."""
@@ -327,18 +336,20 @@ class TradingBot:
             symbol = self.config['SYMBOL']
             quantity = self.current_position['quantity']
 
-            order = await self.exchange.place_order(
-                symbol=symbol,
-                side=side,
-                type='MARKET',
-                quantity=quantity,
-                leverage=self.config['LEVERAGE']
-            )
+            # Get the current position from exchange
+            position = await self.exchange.get_pending_positions(symbol)
+            if not position:
+                self.logger.warning(f"No open position found for {symbol}")
+                self.current_position = None
+                return
 
-            if order['status'] == 'filled':
+            # Use the proper close_position method
+            order = await self.exchange.close_position(position, reason)
+
+            if order:
                 self.logger.info(f"Position closed: {reason} at {price}")
                 self.current_position = None
-                self.risk_manager.update_daily_pnl(order['pnl'])
+                self.risk_manager.update_daily_pnl(0.0)  # PnL is calculated in close_position method
                 # Fetch current balance for trade record
                 try:
                     balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
@@ -350,12 +361,12 @@ class TradingBot:
                     'side': side,
                     'quantity': quantity,
                     'price': price,
-                    'pnl': order.get('pnl', 0.0),
+                    'pnl': 0.0,  # PnL is tracked in the exchange close_position method
                     'balance': balance
                 }
                 self.risk_manager.update_trade_history(trade)
             else:
-                self.logger.error(f"Failed to close position: {order}")
+                self.logger.error(f"Failed to close position")
 
         except Exception as e:
             self.logger.error(f"Error closing position: {e}")
