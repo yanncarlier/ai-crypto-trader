@@ -23,9 +23,9 @@ class RiskManager:
         self.config = config
         self.exchange = exchange
         self.risk_params = RiskParameters(
-            max_position_size_pct=config['MAX_POSITION_SIZE_PCT'] / 100,
-            daily_loss_limit_pct=config['DAILY_LOSS_LIMIT_PCT'] / 100,
-            max_drawdown_pct=config['MAX_DRAWDOWN_PCT'] / 100,
+            max_position_size_pct=config['MAX_POSITION_SIZE_PCT'],
+            daily_loss_limit_pct=config['DAILY_LOSS_LIMIT_PCT'],
+            max_drawdown_pct=config['MAX_DRAWDOWN_PCT'],
             max_hold_period_hours=config['MAX_HOLD_HOURS'],
             volatility_adjusted=config.get('VOLATILITY_ADJUSTED', True),
             atr_period=config.get('ATR_PERIOD', 14),

@@ -45,12 +45,12 @@ def build_prompt(
 
     cycle_minutes = config['CYCLE_MINUTES']
     short_tf = f"{cycle_minutes}-min"
-    long_tf = f"{cycle_minutes * 4}-hour"
+    long_tf = f"{cycle_minutes * 4}-min"
 
     # Risk config
-    max_pos_pct = config['MAX_POSITION_SIZE_PCT']
-    daily_loss_pct = config['DAILY_LOSS_LIMIT_PCT']
-    drawdown_pct = config['MAX_DRAWDOWN_PCT']
+    max_pos_pct = config['MAX_POSITION_SIZE_PCT'] * 100
+    daily_loss_pct = config['DAILY_LOSS_LIMIT_PCT'] * 100
+    drawdown_pct = config['MAX_DRAWDOWN_PCT'] * 100
     max_hold_hours = config['MAX_HOLD_HOURS']
 
     return f"""
