@@ -34,10 +34,16 @@ class RiskManager:
                 raise ValueError("Failed to fetch account info")
             balance = account_info['balance']
 
-            # Get market data for volatility calculation
-            ohlcv = await self.exchange.get_ohlcv(symbol, timeframe=60, limit=self.risk_params.atr_period + 1)
-            if len(ohlcv) < 2:
-                raise ValueError("Not enough data for volatility calculation")
+            # Get market data for volatility calculation with fallback
+            try:
+                ohlcv = await self.exchange.get_ohlcv(symbol, timeframe=60, limit=self.risk_params.atr_period + 1)
+                if len(ohlcv) < 2:
+                    logging.warning("Insufficient data for volatility calculation, disabling volatility adjustment")
+                    self.risk_params.volatility_adjusted = False
+            except Exception as market_err:
+                logging.warning(f"Failed to fetch market data for volatility: {market_err}, proceeding without volatility adjustment")
+                self.risk_params.volatility_adjusted = False
+                ohlcv = []
 
             df = pd.DataFrame(
                 ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])

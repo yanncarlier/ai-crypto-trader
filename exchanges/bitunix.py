@@ -305,35 +305,45 @@ class BitunixFutures(BaseExchange):
             if sl_pct is not None and sl_pct > 0:
                 try:
                     sl_price = current_price * (1 - sl_pct/100) if side.lower() == 'buy' else current_price * (1 + sl_pct/100)
-                    await self._post("/trade/place_order", {
+                    sl_order = await self._post("/trade/place_order", {
                         "symbol": symbol,
                         "qty": str(position_size),
                         "side": 'SELL' if side.upper() == 'BUY' else 'BUY',
-                        "tradeSide": "CLOSE",  # SL orders are closing orders
+                        "tradeSide": "CLOSE",  
                         "orderType": "STOP_MARKET",
                         "stopPrice": str(sl_price),
                         "marginCoin": "USDT",
                     })
-                    logging.info(f"✅ Stop loss set at {sl_price:,.2f}")
+                    logging.info(f"✅ Stop loss set at {sl_price:,.2f} (order: {sl_order.get('orderId', 'unknown')})")
                 except Exception as sl_err:
-                    logging.warning(f"Failed to set stop loss: {sl_err}")
+                    logging.error(f"❌ Failed to set stop loss: {sl_err}")
+                    # Log the full error for debugging
+                    import traceback
+                    logging.error(f"Stop loss error details: {traceback.format_exc()}")
 
             # Set take profit if specified
             if tp_pct is not None and tp_pct > 0:
                 try:
                     tp_price = current_price * (1 + tp_pct/100) if side.lower() == 'buy' else current_price * (1 - tp_pct/100)
-                    await self._post("/trade/place_order", {
+                    tp_order = await self._post("/trade/place_order", {
                         "symbol": symbol,
                         "qty": str(position_size),
                         "side": 'SELL' if side.upper() == 'BUY' else 'BUY',
-                        "tradeSide": "CLOSE",  # TP orders are closing orders
+                        "tradeSide": "CLOSE",  
                         "orderType": "TAKE_PROFIT_MARKET",
                         "stopPrice": str(tp_price),
                         "marginCoin": "USDT",
                     })
-                    logging.info(f"✅ Take profit set at {tp_price:,.2f}")
+                    logging.info(f"✅ Take profit set at {tp_price:,.2f} (order: {tp_order.get('orderId', 'unknown')})")
                 except Exception as tp_err:
-                    logging.warning(f"Failed to set take profit: {tp_err}")
+                    logging.error(f"❌ Failed to set take profit: {tp_err}")
+                    # Log the full error for debugging
+                    import traceback
+                    logging.error(f"Take profit error details: {traceback.format_exc()}")
+            
+            # Also try to create conditional orders using alternative approach
+            if (sl_pct is not None and sl_pct > 0) or (tp_pct is not None and tp_pct > 0):
+                await self._create_conditional_orders(symbol, position_size, side, current_price, sl_pct, tp_pct)
 
             # Log the trade
             trade = {
@@ -440,6 +450,115 @@ class BitunixFutures(BaseExchange):
                 logging.error(f"Error in position monitoring: {e}")
                 await asyncio.sleep(60)  # Wait before retry
     
+    async def _create_conditional_orders(self, symbol: str, position_size: float, side: str, entry_price: float, 
+                                        sl_pct: Optional[float], tp_pct: Optional[float]) -> Dict[str, Any]:
+        """Create conditional stop loss and take profit orders for a position"""
+        results = {}
+        
+        try:
+            # Create Stop Loss order
+            if sl_pct is not None and sl_pct > 0:
+                try:
+                    sl_price = entry_price * (1 - sl_pct/100) if side.lower() == 'buy' else entry_price * (1 + sl_pct/100)
+                    
+                    # Try with different parameter structure first
+                    sl_order_data = {
+                        "symbol": symbol,
+                        "qty": str(position_size),
+                        "side": 'SELL' if side.upper() == 'BUY' else 'BUY',
+                        "tradeSide": "CLOSE",
+                        "orderType": "STOP",
+                        "price": str(sl_price),
+                        "stopPrice": str(sl_price),
+                        "marginCoin": "USDT",
+                        "reduceOnly": True
+                    }
+                    
+                    logging.info(f"Creating stop loss order: {sl_order_data}")
+                    sl_result = await self._post("/trade/place_order", sl_order_data)
+                    
+                    if sl_result and sl_result.get("orderId"):
+                        results["stop_loss"] = sl_result
+                        logging.info(f"✅ Conditional stop loss created: {sl_result.get('orderId')}")
+                    
+                except Exception as sl_cond_err:
+                    logging.warning(f"Failed to create conditional stop loss: {sl_cond_err}")
+                    try:
+                        # Fallback to standard approach
+                        sl_order_data["orderType"] = "STOP_MARKET"
+                        sl_result = await self._post("/trade/place_order", sl_order_data)
+                        if sl_result and sl_result.get("orderId"):
+                            results["stop_loss"] = sl_result
+                            logging.info(f"✅ Fallback stop loss created: {sl_result.get('orderId')}")
+                    except Exception as fallback_err:
+                        logging.error(f"❌ Both stop loss attempts failed: {fallback_err}")
+                
+            # Create Take Profit order
+            if tp_pct is not None and tp_pct > 0:
+                try:
+                    tp_price = entry_price * (1 + tp_pct/100) if side.lower() == 'buy' else entry_price * (1 - tp_pct/100)
+                    
+                    # Try with different parameter structure first
+                    tp_order_data = {
+                        "symbol": symbol,
+                        "qty": str(position_size),
+                        "side": 'SELL' if side.upper() == 'BUY' else 'BUY',
+                        "tradeSide": "CLOSE",
+                        "orderType": "TAKE_PROFIT",
+                        "price": str(tp_price),
+                        "stopPrice": str(tp_price),
+                        "marginCoin": "USDT",
+                        "reduceOnly": True
+                    }
+                    
+                    logging.info(f"Creating take profit order: {tp_order_data}")
+                    tp_result = await self._post("/trade/place_order", tp_order_data)
+                    
+                    if tp_result and tp_result.get("orderId"):
+                        results["take_profit"] = tp_result
+                        logging.info(f"✅ Conditional take profit created: {tp_result.get('orderId')}")
+                        
+                except Exception as tp_cond_err:
+                    logging.warning(f"Failed to create conditional take profit: {tp_cond_err}")
+                    try:
+                        # Fallback to standard approach
+                        tp_order_data["orderType"] = "TAKE_PROFIT_MARKET"
+                        tp_result = await self._post("/trade/place_order", tp_order_data)
+                        if tp_result and tp_result.get("orderId"):
+                            results["take_profit"] = tp_result
+                            logging.info(f"✅ Fallback take profit created: {tp_result.get('orderId')}")
+                    except Exception as fallback_err:
+                        logging.error(f"❌ Both take profit attempts failed: {fallback_err}")
+                        
+        except Exception as e:
+            logging.error(f"❌ Error creating conditional orders: {e}")
+            import traceback
+            logging.error(f"Conditional order error details: {traceback.format_exc()}")
+            
+        return results
+
+    async def get_open_orders(self, symbol: str) -> List[Dict[str, Any]]:
+        """Get all open orders for a symbol"""
+        try:
+            data = await self._get("/trade/get_open_orders", {"symbol": symbol})
+            return data if data else []
+        except Exception as e:
+            logging.warning(f"Failed to fetch open orders for {symbol}: {e}")
+            return []
+
+    async def cancel_order(self, symbol: str, order_id: str) -> bool:
+        """Cancel a specific order"""
+        try:
+            result = await self._post("/trade/cancel_order", {
+                "symbol": symbol,
+                "orderId": order_id,
+                "marginCoin": "USDT"
+            })
+            return result is not None
+        except Exception as e:
+            logging.warning(f"Failed to cancel order {order_id}: {e}")
+            return False
+
     async def start_monitoring(self):
         """Start the position monitoring task"""
         if not self._monitor_task:

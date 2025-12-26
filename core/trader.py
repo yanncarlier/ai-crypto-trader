@@ -267,16 +267,21 @@ class TradingBot:
             balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
         except Exception as e:
             self.logger.warning(f"Failed to fetch account balance for position sizing: {e}, using INITIAL_CAPITAL")
-            balance = self.config.get('INITIAL_CAPITAL', 100)
-        max_size_pct = self.config['MAX_POSITION_SIZE_PCT'] / 100  # Convert percentage to decimal
+            balance = self.config.get('INITIAL_CAPITAL', 401)  # Use actual balance from env
+        max_size_pct = self.config['MAX_POSITION_SIZE_PCT']  # Already a decimal from config
         position_value = balance * max_size_pct
         quantity = position_value / price
         
         # Ensure minimum position size and avoid tiny positions
-        min_quantity = 0.001  # Minimum 0.001 BTC or equivalent
+        min_quantity = 0.005  # Minimum 0.005 BTC or equivalent (to meet exchange minimum)
         quantity = max(quantity, min_quantity)
         
-        self.logger.info(f"Calculated position size: {quantity} {self.config['SYMBOL']}, balance: {balance} USDT, max_size_pct: {max_size_pct}")
+        # Round to 4 decimal places for precision, but ensure minimum
+        quantity = round(quantity, 4)
+        if quantity < min_quantity:
+            quantity = min_quantity
+            
+        self.logger.info(f"Calculated position size: {quantity} {self.config['SYMBOL']}, balance: {balance} USDT, position_value: {position_value} USDT, price: {price}")
         return quantity
 
     def _calculate_stop_loss(self, side: str, entry_price: float) -> float:
