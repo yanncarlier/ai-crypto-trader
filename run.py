@@ -67,6 +67,10 @@ def get_config() -> Dict[str, Any]:
             'DAILY_LOSS_LIMIT_PCT': get_env_float('DAILY_LOSS_LIMIT_PCT', 0) / 100,
             'MAX_DRAWDOWN_PCT': get_env_float('MAX_DRAWDOWN_PCT', 0) / 100,
             'MAX_HOLD_HOURS': get_env_float('MAX_HOLD_HOURS', 0.0),
+            'MIN_POSITION_SIZE': float(os.environ['MIN_POSITION_SIZE']),
+            'VOLATILITY_ADJUSTED': os.environ['VOLATILITY_ADJUSTED'].lower() == 'true',
+            'ATR_PERIOD': int(os.environ['ATR_PERIOD']),
+            'MIN_LIQUIDITY': float(os.environ['MIN_LIQUIDITY']),
 
             # Configuration
             'FORWARD_TESTING': get_env_bool('FORWARD_TESTING', False),
