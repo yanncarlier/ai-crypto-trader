@@ -301,49 +301,24 @@ class BitunixFutures(BaseExchange):
             logging.info(f"Placing order: {order_data}")
             order = await self._post("/trade/place_order", order_data)
 
-            # Set stop loss if specified
-            if sl_pct is not None and sl_pct > 0:
-                try:
-                    sl_price = current_price * (1 - sl_pct/100) if side.lower() == 'buy' else current_price * (1 + sl_pct/100)
-                    sl_order = await self._post("/trade/place_order", {
-                        "symbol": symbol,
-                        "qty": str(position_size),
-                        "side": 'SELL' if side.upper() == 'BUY' else 'BUY',
-                        "tradeSide": "CLOSE",  
-                        "orderType": "STOP_MARKET",
-                        "stopPrice": str(sl_price),
-                        "marginCoin": "USDT",
-                    })
-                    logging.info(f"✅ Stop loss set at {sl_price:,.2f} (order: {sl_order.get('orderId', 'unknown')})")
-                except Exception as sl_err:
-                    logging.error(f"❌ Failed to set stop loss: {sl_err}")
-                    # Log the full error for debugging
-                    import traceback
-                    logging.error(f"Stop loss error details: {traceback.format_exc()}")
-
-            # Set take profit if specified
-            if tp_pct is not None and tp_pct > 0:
-                try:
-                    tp_price = current_price * (1 + tp_pct/100) if side.lower() == 'buy' else current_price * (1 - tp_pct/100)
-                    tp_order = await self._post("/trade/place_order", {
-                        "symbol": symbol,
-                        "qty": str(position_size),
-                        "side": 'SELL' if side.upper() == 'BUY' else 'BUY',
-                        "tradeSide": "CLOSE",  
-                        "orderType": "TAKE_PROFIT_MARKET",
-                        "stopPrice": str(tp_price),
-                        "marginCoin": "USDT",
-                    })
-                    logging.info(f"✅ Take profit set at {tp_price:,.2f} (order: {tp_order.get('orderId', 'unknown')})")
-                except Exception as tp_err:
-                    logging.error(f"❌ Failed to set take profit: {tp_err}")
-                    # Log the full error for debugging
-                    import traceback
-                    logging.error(f"Take profit error details: {traceback.format_exc()}")
-            
-            # Also try to create conditional orders using alternative approach
+            # Try to set TP/SL on the position if it exists
             if (sl_pct is not None and sl_pct > 0) or (tp_pct is not None and tp_pct > 0):
-                await self._create_conditional_orders(symbol, position_size, side, current_price, sl_pct, tp_pct)
+                sl_price = current_price * (1 - sl_pct/100) if side.lower() == 'buy' else current_price * (1 + sl_pct/100) if sl_pct else None
+                tp_price = current_price * (1 + tp_pct/100) if side.lower() == 'buy' else current_price * (1 - tp_pct/100) if tp_pct else None
+
+                # Check if position exists after opening
+                position = await self.get_pending_positions(symbol)
+                if position:
+                    try:
+                        await self.set_position_tp_sl(symbol, position.positionId, sl_price or 0, tp_price or 0)
+                        logging.info(f"✅ Position TP/SL set for position {position.positionId}: SL={sl_price}, TP={tp_price}")
+                    except Exception as pos_tp_sl_err:
+                        logging.error(f"❌ Failed to set position TP/SL: {pos_tp_sl_err}")
+                        # Fallback to conditional orders
+                        await self._create_conditional_orders(symbol, position_size, side, current_price, sl_pct, tp_pct)
+                else:
+                    logging.warning("Position not found after opening, using conditional orders")
+                    await self._create_conditional_orders(symbol, position_size, side, current_price, sl_pct, tp_pct)
 
             # Log the trade
             trade = {
@@ -618,6 +593,16 @@ class BitunixFutures(BaseExchange):
 
     async def get_ticker(self, symbol: str) -> float:
         return await self.get_current_price(symbol)
+
+    async def set_position_tp_sl(self, symbol: str, position_id: str, sl_price: float, tp_price: float):
+        """Set stop loss and take profit on an existing position"""
+        data = {
+            "symbol": symbol,
+            "positionId": position_id,
+            "slPrice": str(sl_price),
+            "tpPrice": str(tp_price)
+        }
+        return await self._post("/trade/place_position_tp_sl_order", data)
 
     async def place_order(self, symbol: str, side: str, type: str, quantity: float, leverage: Optional[int] = None) -> Dict[str, Any]:
         if leverage is not None:
