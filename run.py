@@ -148,8 +148,13 @@ async def main():
                 account_summary = await exchange.get_account_summary(config['CURRENCY'], config['SYMBOL'])
                 live_balance = account_summary['balance']
                 equity = account_summary['equity']
-                config['INITIAL_CAPITAL'] = live_balance
 
+                if live_balance <= 0:
+                    print(f"❌ Error: Account balance is ${live_balance:,.2f}. Cannot start trading with zero or negative balance.")
+                    print("Please check your Bitunix API credentials and ensure your account has sufficient funds.")
+                    sys.exit(1)
+
+                config['INITIAL_CAPITAL'] = live_balance
                 print(f"Balance: ${live_balance:,.2f} {config['CURRENCY']}")
                 print(f"Equity: ${equity:,.2f} {config['CURRENCY']}")
 

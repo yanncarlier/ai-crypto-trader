@@ -142,11 +142,7 @@ class TradingBot:
             # print("DEBUG: Preparing for AI prompt")
             timestamp = datetime.now()
             minutes_elapsed = int((datetime.now() - self.start_time).total_seconds() // 60)
-            try:
-                account_balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
-            except Exception as e:
-                self.logger.warning(f"Failed to fetch account balance: {e}, using INITIAL_CAPITAL")
-                account_balance = self.config['INITIAL_CAPITAL']
+            account_balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
             equity = account_balance  # TODO: include unrealized PnL if any
             open_positions = [
                 self.current_position] if self.current_position else []
@@ -272,11 +268,7 @@ class TradingBot:
 
     async def _calculate_position_size(self, price: float) -> float:
         """Calculate position size based on config and risk."""
-        try:
-            balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
-        except Exception as e:
-            self.logger.warning(f"Failed to fetch account balance for position sizing: {e}, using INITIAL_CAPITAL")
-            balance = self.config['INITIAL_CAPITAL']  # Use actual balance from env
+        balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
         max_size_pct = self.config['MAX_POSITION_SIZE_PCT']  # Already a decimal from config
         position_value = balance * max_size_pct
         quantity = position_value / price
@@ -366,11 +358,7 @@ class TradingBot:
                 self.current_position = None
                 self.risk_manager.update_daily_pnl(pnl)
                 # Fetch current balance for trade record
-                try:
-                    balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
-                except Exception as e:
-                    self.logger.warning(f"Failed to fetch account balance for trade record: {e}")
-                    balance = self.config['INITIAL_CAPITAL']
+                balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
                 trade = {
                     'timestamp': int(datetime.now().timestamp() * 1000),
                     'side': side,
