@@ -53,6 +53,12 @@ def build_prompt(
     drawdown_pct = config['MAX_DRAWDOWN_PCT'] * 100
     max_hold_hours = config['MAX_HOLD_HOURS']
 
+    # Current price comparison
+    candle_price = indicators.get('price', 0)
+    live_price = indicators.get('live_price', 0)
+    price_diff = indicators.get('price_diff', 0)
+    price_diff_pct = indicators.get('price_diff_pct', 0)
+
     return f"""
 You are a professional {crypto_name} scalper: grow equity, preserve capital strictly.
 
@@ -62,6 +68,11 @@ STATE:
 - Time: {timestamp.isoformat()}
 - Equity: ${equity:,.0f} {currency}
 - Positions: {positions_str}
+
+CURRENT PRICE:
+- Candle Close: ${candle_price:,.1f}
+- Live Price: ${live_price:,.1f}
+- Difference: ${price_diff:+,.1f} ({price_diff_pct:+.2f}%)
 
 PRICE:
 {format_ohlcv(price_history_short, short_tf)}

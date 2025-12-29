@@ -109,12 +109,21 @@ class TradingBot:
             # print("DEBUG: MACD calculated")
 
             current_price = df['close'].iloc[-1]
+
+            # Fetch live price for comparison
+            live_price = await self.exchange.get_current_price(self.config['SYMBOL'])
+            price_diff = live_price - current_price
+            price_diff_pct = (price_diff / current_price) * 100 if current_price != 0 else 0
+
             latest_indicators = {
                 'rsi': df['rsi'].iloc[-1],
                 'sma_20': df['sma_20'].iloc[-1],
                 'sma_50': df['sma_50'].iloc[-1],
                 'bb_position': (current_price - df['bb_lower'].iloc[-1]) / (df['bb_upper'].iloc[-1] - df['bb_lower'].iloc[-1]) if df['bb_upper'].iloc[-1] != df['bb_lower'].iloc[-1] else 0.5,
                 'price': current_price,
+                'live_price': live_price,
+                'price_diff': price_diff,
+                'price_diff_pct': price_diff_pct,
                 'trend': 'bullish' if df['sma_20'].iloc[-1] > df['sma_50'].iloc[-1] else 'bearish',
                 'RSI': df['rsi'].iloc[-1],
                 'EMA_20': df['ema_20'].iloc[-1],
@@ -127,7 +136,7 @@ class TradingBot:
                 }
             }
             print(
-                f"DEBUG: Indicators ready, current price: {current_price}, trend: {latest_indicators['trend']}")
+                f"DEBUG: Indicators ready, candle price: {current_price}, live price: {live_price} ({price_diff_pct:+.2f}%), trend: {latest_indicators['trend']}")
 
             # Get AI outlook
             # print("DEBUG: Preparing for AI prompt")
