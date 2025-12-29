@@ -190,13 +190,15 @@ class BitunixFutures(BaseExchange):
             for pos in data:
                 if float(pos.get("qty", 0)) != 0:
                     side = "BUY" if float(pos["qty"]) > 0 else "SELL"
+                    # Handle missing cTime field gracefully
+                    timestamp = int(pos.get("cTime", time.time() * 1000))
                     positions.append(Position(
                         positionId=pos["positionId"],
                         side=side,
                         size=abs(float(pos["qty"])),
                         entry_price=float(pos["avgOpenPrice"]),
                         symbol=symbol,
-                        timestamp=int(pos["cTime"]),
+                        timestamp=timestamp,
                     ))
             return positions
         except Exception as e:
@@ -301,24 +303,9 @@ class BitunixFutures(BaseExchange):
             logging.info(f"Placing order: {order_data}")
             order = await self._post("/trade/place_order", order_data)
 
-            # Try to set TP/SL on the position if it exists
-            if (sl_pct is not None and sl_pct > 0) or (tp_pct is not None and tp_pct > 0):
-                sl_price = current_price * (1 - sl_pct/100) if side.lower() == 'buy' else current_price * (1 + sl_pct/100) if sl_pct else None
-                tp_price = current_price * (1 + tp_pct/100) if side.lower() == 'buy' else current_price * (1 - tp_pct/100) if tp_pct else None
-
-                # Check if position exists after opening
-                position = await self.get_pending_positions(symbol)
-                if position:
-                    try:
-                        await self.set_position_tp_sl(symbol, position.positionId, sl_price or 0, tp_price or 0)
-                        logging.info(f"✅ Position TP/SL set for position {position.positionId}: SL={sl_price}, TP={tp_price}")
-                    except Exception as pos_tp_sl_err:
-                        logging.error(f"❌ Failed to set position TP/SL: {pos_tp_sl_err}")
-                        # Fallback to conditional orders
-                        await self._create_conditional_orders(symbol, position_size, side, current_price, sl_pct, tp_pct)
-                else:
-                    logging.warning("Position not found after opening, using conditional orders")
-                    await self._create_conditional_orders(symbol, position_size, side, current_price, sl_pct, tp_pct)
+            # Note: SL/TP will be monitored manually by the trader's monitor_positions() method
+            # Skip setting conditional orders on exchange as they may not be supported
+            logging.info("ℹ️  SL/TP orders will be monitored manually (exchange conditional orders skipped)")
 
             # Log the trade
             trade = {

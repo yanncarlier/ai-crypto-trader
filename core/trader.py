@@ -45,14 +45,37 @@ class TradingBot:
                     timestamp = datetime.fromtimestamp(position.timestamp)
             else:
                 timestamp = datetime.now()
+
+            # Check for SL/TP overrides from position_overrides.json
+            override_sl, override_tp = self._load_position_overrides(position.positionId)
+
+            # Preserve existing SL/TP if we already have them, otherwise use overrides or calculate new ones
+            existing_sl = self.current_position.get('stop_loss') if self.current_position else None
+            existing_tp = self.current_position.get('take_profit') if self.current_position else None
+
+            calculated_sl = self._calculate_stop_loss(position.side, position.entry_price)
+            calculated_tp = self._calculate_take_profit(position.side, position.entry_price)
+
+            # Priority: existing > override > calculated
+            final_sl = existing_sl if existing_sl is not None else (override_sl if override_sl is not None else calculated_sl)
+            final_tp = existing_tp if existing_tp is not None else (override_tp if override_tp is not None else calculated_tp)
+
             self.current_position = {
                 'side': position.side,
                 'quantity': position.size,
                 'entry_price': position.entry_price,
                 'timestamp': timestamp,
-                'stop_loss': self._calculate_stop_loss(position.side, position.entry_price),
-                'take_profit': self._calculate_take_profit(position.side, position.entry_price)
+                'stop_loss': final_sl,
+                'take_profit': final_tp
             }
+
+            # Log SL/TP info for debugging
+            if existing_sl is not None:
+                self.logger.debug(f"Position updated - preserved existing SL: {final_sl:.2f}, TP: {final_tp:.2f}")
+            elif override_sl is not None:
+                self.logger.info(f"Position updated - using override SL: {final_sl:.2f}, TP: {final_tp:.2f}")
+            else:
+                self.logger.info(f"Position updated - calculated SL: {final_sl:.2f}, TP: {final_tp:.2f}")
             self.last_trade_time = timestamp
         else:
             self.current_position = None
@@ -301,6 +324,38 @@ class TradingBot:
         else:
             return entry_price * (1 - tp_pct)
 
+    def _load_position_overrides(self, position_id: str) -> tuple:
+        """Load SL/TP overrides for a specific position from position_overrides.json.
+
+        Returns:
+            tuple: (stop_loss_price, take_profit_price) or (None, None) if not found
+        """
+        try:
+            import json
+            from pathlib import Path
+
+            overrides_file = Path(__file__).parent.parent / 'position_overrides.json'
+            if not overrides_file.exists():
+                return None, None
+
+            with open(overrides_file, 'r') as f:
+                data = json.load(f)
+
+            # Check if overrides are for the correct symbol
+            if data.get('symbol') != self.config['SYMBOL']:
+                return None, None
+
+            # Find the position by ID
+            for pos in data.get('positions', []):
+                if str(pos.get('position_id')) == str(position_id):
+                    return pos.get('sl_price'), pos.get('tp_price')
+
+            return None, None
+
+        except Exception as e:
+            self.logger.warning(f"Error loading position overrides: {e}")
+            return None, None
+
     async def monitor_positions(self):
         """Monitor open positions and manage exits."""
         if not self.current_position:
@@ -311,23 +366,38 @@ class TradingBot:
             pos = self.current_position
             side = pos['side']
 
+            # Safety check: ensure SL/TP values are valid
+            if 'stop_loss' not in pos or 'take_profit' not in pos or pos['stop_loss'] is None or pos['take_profit'] is None:
+                self.logger.warning(f"Position missing SL/TP values, skipping monitoring: {pos}")
+                return
+
+            # Log current monitoring state
+            self.logger.debug(f"Monitoring {side} position: Price={current_price:.2f}, SL={pos['stop_loss']:.2f}, TP={pos['take_profit']:.2f}")
+
             # Check stop loss / take profit
             if side == 'BUY':
                 if current_price <= pos['stop_loss']:
+                    self.logger.info(f"Stop Loss triggered for BUY position: {current_price:.2f} <= {pos['stop_loss']:.2f}")
                     await self._close_position('SELL', current_price, "Stop Loss")
                 elif current_price >= pos['take_profit']:
+                    self.logger.info(f"Take Profit triggered for BUY position: {current_price:.2f} >= {pos['take_profit']:.2f}")
                     await self._close_position('SELL', current_price, "Take Profit")
-            else:
+            else:  # SELL position
                 if current_price >= pos['stop_loss']:
+                    self.logger.info(f"Stop Loss triggered for SELL position: {current_price:.2f} >= {pos['stop_loss']:.2f}")
                     await self._close_position('BUY', current_price, "Stop Loss")
                 elif current_price <= pos['take_profit']:
+                    self.logger.info(f"Take Profit triggered for SELL position: {current_price:.2f} <= {pos['take_profit']:.2f}")
                     await self._close_position('BUY', current_price, "Take Profit")
 
             # Check max hold time
             if self.last_trade_time:
-                if (datetime.now() - self.last_trade_time) > timedelta(hours=self.config['MAX_HOLD_HOURS']):
+                hold_duration = datetime.now() - self.last_trade_time
+                max_hold = timedelta(hours=self.config['MAX_HOLD_HOURS'])
+                if hold_duration > max_hold:
                     # Determine correct side to close: opposite of current position side
                     close_side = 'SELL' if side == 'BUY' else 'BUY'
+                    self.logger.info(f"Max hold time exceeded ({hold_duration} > {max_hold}), closing position")
                     await self._close_position(close_side, current_price, "Max Hold Time")
 
         except Exception as e:
