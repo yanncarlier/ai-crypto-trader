@@ -33,30 +33,42 @@ class TradingBot:
         self.start_time = datetime.now()
 
     async def _update_position_from_exchange(self):
-        """Update local position state from exchange."""
-        position = await self.exchange.get_pending_positions(self.config['SYMBOL'])
-        if position:
-            # Convert timestamp to datetime, handling both seconds and milliseconds
-            if position.timestamp:
-                # If timestamp is in milliseconds (typical for exchanges), convert by dividing by 1000
-                # If it's already in seconds, then dividing by 1000 would be wrong. We'll assume milliseconds if > 1e10
-                if position.timestamp > 1e10:  # Likely milliseconds
-                    timestamp = datetime.fromtimestamp(position.timestamp / 1000)
-                else:
-                    timestamp = datetime.fromtimestamp(position.timestamp)
-            else:
-                timestamp = datetime.now()
+        """Update local position state from exchange using account summary (more reliable)."""
+        try:
+            account_summary = await self.exchange.get_account_summary(self.config['CURRENCY'], self.config['SYMBOL'])
+            positions = account_summary.get('positions', [])
 
-            self.current_position = {
-                'side': position.side,
-                'quantity': position.size,
-                'entry_price': position.entry_price,
-                'timestamp': timestamp
-            }
-            self.last_trade_time = timestamp
-        else:
-            self.current_position = None
-            self.last_trade_time = None
+            if positions:
+                # For futures, there should only be one position per symbol
+                position = positions[0]  # Take the first position
+
+                # Convert timestamp to datetime, handling both seconds and milliseconds
+                if position.timestamp:
+                    # If timestamp is in milliseconds (typical for exchanges), convert by dividing by 1000
+                    # If it's already in seconds, then dividing by 1000 would be wrong. We'll assume milliseconds if > 1e10
+                    if position.timestamp > 1e10:  # Likely milliseconds
+                        timestamp = datetime.fromtimestamp(position.timestamp / 1000)
+                    else:
+                        timestamp = datetime.fromtimestamp(position.timestamp)
+                else:
+                    timestamp = datetime.now()
+
+                self.current_position = {
+                    'side': position.side,
+                    'quantity': position.size,
+                    'entry_price': position.entry_price,
+                    'timestamp': timestamp
+                }
+                self.last_trade_time = timestamp
+                self.app_logger.info(f"Detected existing position: {position.side} {position.size} @ ${position.entry_price:,.0f}")
+            else:
+                if self.current_position is not None:
+                    self.app_logger.info("Position closed - no positions found")
+                self.current_position = None
+                self.last_trade_time = None
+        except Exception as e:
+            self.logger.warning(f"Failed to update position from exchange: {e}")
+            # Keep existing position state on error rather than clearing it
 
     async def run_cycle(self):
         """Run a single trading cycle: analyze market, get AI decision, execute trade if appropriate."""
@@ -222,6 +234,19 @@ class TradingBot:
                 self.logger.warning("Calculated position size is zero or negative")
                 return
 
+            # Check for existing positions directly from exchange before placing order
+            existing_position = await self.exchange.get_pending_positions(symbol)
+            if existing_position:
+                self.logger.warning(f"Existing position found on exchange: {existing_position.side} {existing_position.size} @ ${existing_position.entry_price:,.0f} - skipping new order")
+                # Update local state to match exchange
+                self.current_position = {
+                    'side': existing_position.side,
+                    'quantity': existing_position.size,
+                    'entry_price': existing_position.entry_price,
+                    'timestamp': datetime.fromtimestamp(existing_position.timestamp / 1000) if existing_position.timestamp > 1e10 else datetime.fromtimestamp(existing_position.timestamp)
+                }
+                return
+
             # Execute the trade
             order = await self.exchange.open_position(
                 symbol=symbol,
@@ -229,12 +254,26 @@ class TradingBot:
                 size=str(quantity)
             )
 
-            if order:
-                # Verify position was actually opened by checking exchange state
-                await asyncio.sleep(1)  # Brief delay for exchange to update
-                verified_position = await self.exchange.get_pending_positions(symbol)
+            # Debug: Log order response details
+            self.logger.info(f"Order response: {order}")
 
-                if verified_position and abs(verified_position.size - quantity) < 0.001:  # Allow small rounding difference
+            if order:
+                # Verify position was actually opened by checking account summary (more reliable than position API)
+                await asyncio.sleep(3)  # Shorter delay since account summary might update faster
+                account_summary = await self.exchange.get_account_summary(self.config['CURRENCY'], symbol)
+
+                # Debug: Log account summary details
+                self.logger.info(f"Account summary after order: positions={len(account_summary.get('positions', []))}, equity=${account_summary.get('equity', 0):,.2f}")
+
+                verified_position = None
+                if account_summary.get('positions'):
+                    for pos in account_summary['positions']:
+                        self.logger.info(f"Found position in summary: side={pos.side}, size={pos.size}, entry_price={pos.entry_price}")
+                        if abs(pos.size - quantity) < 0.001:  # Found our position
+                            verified_position = pos
+                            break
+
+                if verified_position:
                     self.current_position = {
                         'side': side,
                         'quantity': quantity,
@@ -255,6 +294,11 @@ class TradingBot:
                     self.risk_manager.update_trade_history(trade)
                 else:
                     self.logger.error(f"Position verification failed - exchange state doesn't match expected position")
+                    # Debug: More details about the failure
+                    if not verified_position:
+                        self.logger.error("No position found after order placement")
+                    else:
+                        self.logger.error(f"Position size mismatch: expected {quantity}, got {verified_position.size}")
                     # Attempt to close any unexpected position
                     if verified_position:
                         await self.exchange.close_position(verified_position, "verification_cleanup")

@@ -164,21 +164,31 @@ class BitunixFutures(BaseExchange):
         try:
             data = await self._get("/position/get_pending_positions",
                              {"symbol": symbol})
+            # Debug: Log the raw API response
+            logging.info(f"Position API response for {symbol}: {data}")
+
             if not data:
+                logging.warning(f"No position data returned for {symbol}")
                 return None
+
             for pos in data:
-                if pos.get("symbol") == symbol and float(pos.get("qty", 0)) != 0:
-                    side = "BUY" if float(pos["qty"]) > 0 else "SELL"
+                logging.info(f"Checking position: {pos}")
+                qty = float(pos.get("qty", 0))
+                if pos.get("symbol") == symbol and qty != 0:
+                    side = "BUY" if qty > 0 else "SELL"
                     return Position(
                         positionId=pos["positionId"],
                         side=side,
-                        size=abs(float(pos["qty"])),
+                        size=abs(qty),
                         entry_price=float(pos["avgOpenPrice"]),
                         symbol=symbol,
                         timestamp=int(pos["cTime"]),
                     )
+                else:
+                    logging.info(f"Position {pos.get('symbol')} qty {qty} - not matching criteria")
         except Exception as e:
             logging.warning(f"Failed to fetch positions: {e}")
+            logging.warning(f"Exception details: {type(e).__name__}: {e}")
         return None
 
     async def get_all_positions(self, symbol: str) -> List[Position]:
