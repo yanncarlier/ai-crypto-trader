@@ -603,8 +603,28 @@ class BitunixFutures(BaseExchange):
             ])
         return ohlcv
 
+    def _get_supported_interval(self, timeframe_minutes: int) -> str:
+        """Map timeframe minutes to supported Bitunix interval"""
+        if timeframe_minutes <= 1:
+            return "1m"
+        elif timeframe_minutes <= 5:
+            return "5m"
+        elif timeframe_minutes <= 15:
+            return "15m"
+        elif timeframe_minutes <= 30:
+            return "30m"
+        elif timeframe_minutes <= 60:
+            return "1h"
+        elif timeframe_minutes <= 240:
+            return "4h"
+        elif timeframe_minutes <= 1440:
+            return "1d"
+        else:
+            return "1d"  # fallback
+
     async def get_ohlcv(self, symbol: str, timeframe: Any, limit: int) -> list:
-        tf_str = f"{int(timeframe)}m"
+        tf_minutes = int(timeframe)
+        tf_str = self._get_supported_interval(tf_minutes)
         return await self.fetch_ohlcv(symbol, tf_str, limit)
 
     async def get_ticker(self, symbol: str) -> float:
