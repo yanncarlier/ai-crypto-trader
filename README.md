@@ -1,6 +1,6 @@
-# ai-crypto-trader
-
-
+Use at Your Own Risk
+This is experimental/beta software. It may contain bugs or cause unexpected behavior.
+No warranties are provided. Use entirely at your own discretion and risk.
 
 # AI Crypto Trader
 
