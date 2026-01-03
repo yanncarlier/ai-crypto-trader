@@ -27,13 +27,21 @@ def build_prompt(
     leverage = config['LEVERAGE']
     taker_fee = config['TAKER_FEE'] * 100
 
+    # AI prompt configuration
+    max_risk_pct = config.get('MAX_RISK_PERCENT', 1.0)
+    rsi_period = config.get('RSI_PERIOD', 14)
+    ema_period = config.get('EMA_PERIOD', 20)
+    bb_period = config.get('BB_PERIOD', 20)
+    long_tf_multiplier = config.get('LONG_TF_MULTIPLIER', 4)
+    ohlcv_limit = config.get('OHLCV_LIMIT', 15)
+
     # Open positions (compact)
     positions_str = "\n".join([
         f"- {pos.get('side', '?')} {pos.get('size', 0)} @ ${pos.get('entry_price', 0):,.0f} | PnL ${pos.get('unrealized_pnl', 0):+.0f}"
         for pos in open_positions
     ]) or "No open positions."
 
-    # Compact OHLCV (last 15 candles instead of 20)
+    # Compact OHLCV with configurable limit
     def format_ohlcv(history: OHLCV, timeframe: str, limit: int = 15) -> str:
         lines = [f"{timeframe} OHLCV (last {limit}):"]
         for c in history[-limit:]:
@@ -45,13 +53,9 @@ def build_prompt(
 
     cycle_minutes = config['CYCLE_MINUTES']
     short_tf = f"{cycle_minutes}-min"
-    long_tf = f"{cycle_minutes * 4}-min"
+    long_tf = f"{cycle_minutes * long_tf_multiplier}-min"
 
     # Risk config
-    max_pos_pct = config['MAX_POSITION_SIZE_PCT'] * 100
-    daily_loss_pct = config['DAILY_LOSS_LIMIT_PCT'] * 100
-    drawdown_pct = config['MAX_DRAWDOWN_PCT'] * 100
-    max_hold_hours = config['MAX_HOLD_HOURS']
 
     # Current price comparison
     candle_price = indicators.get('price', 0)
@@ -75,31 +79,28 @@ CURRENT PRICE:
 - Difference: ${price_diff:+,.1f} ({price_diff_pct:+.2f}%)
 
 PRICE:
-{format_ohlcv(price_history_short, short_tf)}
-{format_ohlcv(price_history_long, long_tf)}
+{format_ohlcv(price_history_short, short_tf, ohlcv_limit)}
+{format_ohlcv(price_history_long, long_tf, ohlcv_limit)}
 
 INDICATORS:
-- RSI(14): {indicators.get('RSI', 'N/A')}
+- RSI({rsi_period}): {indicators.get('RSI', 'N/A')}
 - MACD: hist {indicators.get('MACD', {}).get('hist', 'N/A')} | signal {indicators.get('MACD', {}).get('signal', 'N/A')}
-- EMA20: {indicators.get('EMA_20', 'N/A'):,.1f}
-- BB: U {indicators.get('BB_upper', 'N/A'):,.1f} | M {indicators.get('BB_middle', 'N/A'):,.1f} | L {indicators.get('BB_lower', 'N/A'):,.1f}
+- EMA{ema_period}: {indicators.get('EMA_20', 'N/A'):,.1f}
+- BB({bb_period}): U {indicators.get('BB_upper', 'N/A'):,.1f} | M {indicators.get('BB_middle', 'N/A'):,.1f} | L {indicators.get('BB_lower', 'N/A'):,.1f} | Pos {indicators.get('bb_position', 'N/A'):.2f}
+- SMA{ema_period}: {indicators.get('sma_20', 'N/A'):,.1f}
+- SMA{ema_period*2}: {indicators.get('sma_50', 'N/A'):,.1f}
+- Trend: {indicators.get('trend', 'N/A')}
 
 SIGNALS:
-- Volatility: {predictive_signals.get('volatility', 'N/A')}
-- Order Book: bid {predictive_signals.get('order_book_depth_bid', 'N/A')} | ask {predictive_signals.get('order_book_depth_ask', 'N/A')}
-- Sentiment: {predictive_signals.get('sentiment_proxy', 'Neutral')} (override with tools if needed)
+- Volatility: ATR({config.get('ATR_PERIOD', 14)}) = {predictive_signals.get('volatility', 'N/A')}
 
 RULES (strict):
-- Max risk/trade: 1% equity
-- Max position: {max_pos_pct}% equity
-- Daily loss limit: {daily_loss_pct}%
-- Max drawdown: {drawdown_pct}%
+- Max risk/trade: {max_risk_pct:.1f}% equity
 - Leverage: {leverage}x
-- Default SL: ~0.8% | TP: ~2.0%
 - Fee: {taker_fee:.2f}%
-- Max hold: {max_hold_hours}h
-- Volume simulated → ignore trends
-- Only enter on high-probability timeframe alignment
+- Enter on strong trend alignment between timeframes
+- Exit when AI signals trend reversal
+- Preserve capital, avoid over-leveraging
 
 TASK:
 Analyze {short_tf} vs {long_tf} trend alignment, price action, indicators, order book, sentiment.
@@ -109,6 +110,6 @@ Respond with valid JSON only — no text outside, no markdown:
 {{
   "interpretation": "Strong Bullish" | "Bullish" | "Neutral" | "Bearish" | "Strong Bearish",
   "confidence": 0.0 to 1.0,
-  "action": "BUY" | "SELL" | "CLOSE_POSITION" | "HOLD" | "NO_TRADE"
+  "action": "OPEN_LONG" | "OPEN_SHORT" | "CLOSE_POSITION" | "HOLD" | "NO_TRADE"
 }}
 """.strip()

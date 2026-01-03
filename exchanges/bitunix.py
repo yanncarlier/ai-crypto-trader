@@ -248,9 +248,7 @@ class BitunixFutures(BaseExchange):
                    {"symbol": symbol, "marginMode": mode_str, "marginCoin": "USDT"})
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
-    async def open_position(self, symbol: str, side: str, size: str,
-                          sl_pct: Optional[float] = None,
-                          tp_pct: Optional[float] = None) -> Dict:
+    async def open_position(self, symbol: str, side: str, size: str) -> Dict:
         """Open a new position with risk management"""
         try:
             current_price = await self.get_current_price(symbol)
@@ -275,7 +273,7 @@ class BitunixFutures(BaseExchange):
                         position_size = min(position_size, (position_size * 0.1))
                 except Exception as risk_err:
                     logging.warning(f"Risk check error, proceeding cautiously: {risk_err}")
-                    
+
                 # Try to use risk manager for position sizing, but don't fail if it doesn't work
                 if self.risk_manager.risk_params.volatility_adjusted:
                     try:
@@ -290,6 +288,20 @@ class BitunixFutures(BaseExchange):
                 logging.error("Position size must be positive")
                 raise ValueError("Position size must be positive")
 
+            # Check if in forward testing mode (real data, no execution)
+            if self.config.get('FORWARD_TESTING', False):
+                logging.info(f"📊 FORWARD TESTING: Would open {side.upper()} {position_size:.4f} {symbol} @ ${current_price:,.2f} (NOT EXECUTED)")
+                # Return a mock order response
+                mock_order = {
+                    "orderId": f"forward_test_{int(time.time())}",
+                    "status": "simulated",
+                    "symbol": symbol,
+                    "side": side.upper(),
+                    "qty": str(position_size),
+                    "price": str(current_price)
+                }
+                return mock_order
+
             # Place the main order
             order_data = {
                 "symbol": symbol,
@@ -299,7 +311,7 @@ class BitunixFutures(BaseExchange):
                 "orderType": "MARKET",
                 "marginCoin": "USDT",
             }
-            
+
             logging.info(f"Placing order: {order_data}")
             order = await self._post("/trade/place_order", order_data)
 
@@ -336,7 +348,28 @@ class BitunixFutures(BaseExchange):
         try:
             side = 'SELL' if position.side == 'BUY' else 'BUY'
             current_price = await self.get_current_price(position.symbol)
-            
+
+            # Check if in forward testing mode (real data, no execution)
+            if self.config.get('FORWARD_TESTING', False):
+                # Calculate PnL
+                pnl = (current_price - position.entry_price) * position.size
+                if position.side == 'SELL':
+                    pnl = -pnl
+
+                logging.info(f"📊 FORWARD TESTING: Would close {position.side} {position.size:.4f} {position.symbol} @ "
+                           f"${current_price:,.2f} | PnL: ${pnl:,.2f} ({reason}) - NOT EXECUTED")
+
+                # Return a mock response
+                mock_order = {
+                    "orderId": f"forward_test_close_{int(time.time())}",
+                    "status": "simulated",
+                    "symbol": position.symbol,
+                    "side": side,
+                    "qty": str(position.size),
+                    "price": str(current_price)
+                }
+                return {'order': mock_order, 'pnl': pnl}
+
             # Place the order
             order = await self._post("/trade/place_order", {
                 "symbol": position.symbol,
@@ -346,12 +379,12 @@ class BitunixFutures(BaseExchange):
                 "orderType": "MARKET",
                 "marginCoin": "USDT",
             })
-            
+
             # Calculate PnL
             pnl = (current_price - position.entry_price) * position.size
             if position.side == 'SELL':
                 pnl = -pnl
-            
+
             # Log the trade
             trade = {
                 'symbol': position.symbol,
@@ -365,14 +398,14 @@ class BitunixFutures(BaseExchange):
                 'balance': await self.get_account_balance('USDT') + pnl,
                 'reason': reason
             }
-            
+
             if self.risk_manager:
                 self.risk_manager.update_trade_history(trade)
-            
+
             logging.info(f"✅ Closed {position.side} {position.size:.4f} {position.symbol} @ "
                        f"${current_price:,.2f} | PnL: ${pnl:,.2f} ({reason})")
             return {'order': order, 'pnl': pnl}
-            
+
         except Exception as e:
             logging.error(f"❌ Error closing position: {e}")
             raise
@@ -592,6 +625,11 @@ class BitunixFutures(BaseExchange):
         return await self._post("/trade/place_position_tp_sl_order", data)
 
     async def place_order(self, symbol: str, side: str, type: str, quantity: float, leverage: Optional[int] = None) -> Dict[str, Any]:
+        # Check if in forward testing mode (real data, no execution)
+        if self.config.get('FORWARD_TESTING', False):
+            logging.info(f"📊 FORWARD TESTING: Would place {type} order {side.upper()} {quantity:.6f} {symbol} (NOT EXECUTED)")
+            return {"status": "simulated", "orderId": f"forward_test_{int(time.time())}", "pnl": 0.0}
+
         if leverage is not None:
             await self.set_leverage(symbol, leverage)
         position = await self.get_pending_positions(symbol)

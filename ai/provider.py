@@ -22,7 +22,7 @@ PROVIDER_CONFIG = {
 class AIOutlook(BaseModel):
     interpretation: Literal["Bullish", "Bearish", "Neutral"]
     reasons: str = Field(min_length=1)
-    action: Optional[Literal["BUY", "SELL", "CLOSE_POSITION", "HOLD", "NO_TRADE"]] = None
+    action: Optional[Literal["OPEN_LONG", "OPEN_SHORT", "CLOSE_POSITION", "HOLD", "NO_TRADE"]] = None
     confidence: Optional[float] = Field(ge=0.0, le=1.0, default=0.5)
 
 
@@ -90,8 +90,8 @@ async def send_request(prompt: str, config: Dict[str, Any], api_key: Optional[st
                 # If interpretation not provided, infer from action if possible
                 if not interpretation and action:
                     interp_map = {
-                        "BUY": "Bullish",
-                        "SELL": "Bearish",
+                        "OPEN_LONG": "Bullish",
+                        "OPEN_SHORT": "Bearish",
                         "HOLD": "Neutral",
                         "NO_TRADE": "Neutral",
                         "CLOSE_POSITION": "Neutral"

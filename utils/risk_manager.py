@@ -8,14 +8,9 @@ import time
 
 @dataclass
 class RiskParameters:
-    max_position_size_pct: float
-    daily_loss_limit_pct: float
-    max_drawdown_pct: float
-    max_hold_period_hours: int
     volatility_adjusted: bool
     atr_period: int
     max_leverage: int
-    min_liquidity: float
 
 
 class RiskManager:
@@ -23,14 +18,9 @@ class RiskManager:
         self.config = config
         self.exchange = exchange
         self.risk_params = RiskParameters(
-            max_position_size_pct=config['MAX_POSITION_SIZE_PCT'],
-            daily_loss_limit_pct=config['DAILY_LOSS_LIMIT_PCT'],
-            max_drawdown_pct=config['MAX_DRAWDOWN_PCT'],
-            max_hold_period_hours=config['MAX_HOLD_HOURS'],
             volatility_adjusted=config.get('VOLATILITY_ADJUSTED', True),
             atr_period=config.get('ATR_PERIOD', 14),
-            max_leverage=config['LEVERAGE'],
-            min_liquidity=config.get('MIN_LIQUIDITY', 1000000)
+            max_leverage=config['LEVERAGE']
         )
         self.trade_history: List[Dict] = []
         self.daily_pnl: Dict[str, float] = {}
@@ -58,7 +48,7 @@ class RiskManager:
                 ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
             # Calculate position size based on risk parameters
-            max_position_value = balance * self.config['MAX_POSITION_SIZE_PCT']
+            max_position_value = balance  # Use full balance
 
             if self.risk_params.volatility_adjusted:
                 # Use ATR for volatility-based position sizing
@@ -68,23 +58,13 @@ class RiskManager:
                     vol_adjustment = 1.0 / (1 + (atr / price) * 10)
                     max_position_value *= vol_adjustment
 
-            # Check daily loss limit
-            today = pd.Timestamp.utcnow().strftime('%Y-%m-%d')
-            daily_pnl = self.daily_pnl.get(today, 0)
-            if daily_pnl < 0:
-                # Reduce position size if approaching daily loss limit
-                loss_ratio = abs(
-                    daily_pnl) / (balance * self.config['DAILY_LOSS_LIMIT_PCT'])
-                max_position_value *= max(0, 1 - loss_ratio)
-
             # Calculate number of contracts and apply limits
             contract_size = max_position_value / price
             final_size = min(position_size, contract_size)
 
             return final_size, {
                 'max_position_value': max_position_value,
-                'volatility_adjusted': self.risk_params.volatility_adjusted,
-                'daily_pnl_impact': daily_pnl
+                'volatility_adjusted': self.risk_params.volatility_adjusted
             }
 
         except Exception as e:
@@ -122,29 +102,7 @@ class RiskManager:
 
     async def check_risk_limits(self, symbol: str) -> Tuple[bool, str]:
         """Check if trading should be paused due to risk limits"""
-        try:
-            balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
-
-            # Check daily loss limit
-            today = pd.Timestamp.utcnow().strftime('%Y-%m-%d')
-            if today in self.daily_pnl and self.daily_pnl[today] < 0:
-                max_daily_loss = balance * self.config['DAILY_LOSS_LIMIT_PCT']
-                if abs(self.daily_pnl[today]) >= max_daily_loss:
-                    return False, f"Daily loss limit reached: {self.daily_pnl[today]:.2f} {self.config['CURRENCY']}"
-
-            # Check max drawdown
-            if self.trade_history:
-                peak = max(t.get('balance', 0)
-                           for t in self.trade_history + [{'balance': balance}])
-                drawdown = (peak - balance) / peak if peak > 0 else 0
-                if drawdown > self.config['MAX_DRAWDOWN_PCT']:
-                    return False, f"Max drawdown exceeded: {drawdown*100:.2f}%"
-
-            return True, "OK"
-
-        except Exception as e:
-            logging.error(f"Error checking risk limits: {e}")
-            return False, f"Risk check error: {str(e)}"
+        return True, "OK"
 
     async def can_trade(self, decision: Dict, current_price: float, current_position: Optional[Dict]) -> bool:
         """Check if a trade can be executed based on risk rules."""
@@ -167,7 +125,7 @@ class RiskManager:
 
             # Check position size feasibility
             balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
-            proposed_size = (balance * self.config['MAX_POSITION_SIZE_PCT']) / current_price
+            proposed_size = balance / current_price  # Use full balance
             adjusted_size, details = await self.calculate_position_size(self.config['SYMBOL'], current_price, proposed_size)
             if adjusted_size <= 0:
                 logging.warning("Adjusted position size is zero")

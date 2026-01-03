@@ -46,31 +46,33 @@ def get_env_str(name: str, default: str) -> str:
     return os.getenv(name, default)
 
 
+
 def get_config() -> Dict[str, Any]:
     """Get configuration from environment variables"""
     try:
         config = {
             # Trading Configuration
-            'CRYPTO': 'PLACEHOLDER',
-            'SYMBOL': get_env_str('SYMBOL', 'PLACEHOLDER'),
-            'CURRENCY': get_env_str('CURRENCY', 'PLACEHOLDER'),
+            'CRYPTO': get_env_str('CRYPTO', 'BTC'),
+            'SYMBOL': get_env_str('SYMBOL', 'BTCUSDT'),
+            'CURRENCY': get_env_str('CURRENCY', 'USDT'),
             'CYCLE_MINUTES': get_env_float('CYCLE_MINUTES', 0),
             'LEVERAGE': get_env_int('LEVERAGE', 2),
             'MARGIN_MODE': get_env_str('MARGIN_MODE', 'PLACEHOLDER'),
-            'STOP_LOSS_PERCENT': get_env_float('STOP_LOSS_PERCENT', 0) or None,
-            'TAKE_PROFIT_PERCENT': get_env_float('TAKE_PROFIT_PERCENT', 0) or None,
-            'INITIAL_CAPITAL': get_env_float('INITIAL_CAPITAL', 0),
             'TAKER_FEE': get_env_float('TAKER_FEE', 0),
 
             # Risk Management
-            'MAX_POSITION_SIZE_PCT': get_env_float('MAX_POSITION_SIZE_PCT', 0) / 100,
-            'DAILY_LOSS_LIMIT_PCT': get_env_float('DAILY_LOSS_LIMIT_PCT', 0) / 100,
-            'MAX_DRAWDOWN_PCT': get_env_float('MAX_DRAWDOWN_PCT', 0) / 100,
-            'MAX_HOLD_HOURS': get_env_float('MAX_HOLD_HOURS', 0.0),
-            'MIN_POSITION_SIZE': float(os.environ['MIN_POSITION_SIZE']),
             'VOLATILITY_ADJUSTED': os.environ['VOLATILITY_ADJUSTED'].lower() == 'true',
             'ATR_PERIOD': int(os.environ['ATR_PERIOD']),
-            'MIN_LIQUIDITY': float(os.environ['MIN_LIQUIDITY']),
+
+            # AI Prompt Configuration
+            'MAX_RISK_PERCENT': get_env_float('MAX_RISK_PERCENT', 1.0),
+            'DEFAULT_SL_PERCENT': get_env_float('DEFAULT_SL_PERCENT', 0.8),
+            'DEFAULT_TP_PERCENT': get_env_float('DEFAULT_TP_PERCENT', 2.0),
+            'RSI_PERIOD': get_env_int('RSI_PERIOD', 14),
+            'EMA_PERIOD': get_env_int('EMA_PERIOD', 20),
+            'BB_PERIOD': get_env_int('BB_PERIOD', 20),
+            'LONG_TF_MULTIPLIER': get_env_int('LONG_TF_MULTIPLIER', 4),
+            'OHLCV_LIMIT': get_env_int('OHLCV_LIMIT', 15),
 
             # Configuration
             'FORWARD_TESTING': get_env_bool('FORWARD_TESTING', False),
@@ -79,7 +81,6 @@ def get_config() -> Dict[str, Any]:
             'LLM_TEMPERATURE': get_env_float('LLM_TEMPERATURE', 0),
             'LLM_MAX_TOKENS': get_env_int('LLM_MAX_TOKENS', 0),
             'EXCHANGE': get_env_str('EXCHANGE', 'PLACEHOLDER'),
-            'TEST_NET': get_env_bool('TEST_NET', False),
             'EXCHANGE_API_KEY': get_env_str('EXCHANGE_API_KEY', 'PLACEHOLDER'),
             'EXCHANGE_API_SECRET': get_env_str('EXCHANGE_API_SECRET', 'PLACEHOLDER'),
             'LLM_API_KEY': get_env_str('LLM_API_KEY', 'PLACEHOLDER'),
@@ -113,12 +114,10 @@ async def main():
         mode = "PAPER" if config['FORWARD_TESTING'] else "LIVE"
         print(f"Bitunix Futures Trader | {mode} | {config['LLM_PROVIDER']}")
         print(f"Symbol: {config['SYMBOL']} | Leverage: {config['LEVERAGE']}x")
-        print(
-            f"Position: {config['MAX_POSITION_SIZE_PCT']*100:.1f}% | Stop Loss: {config['STOP_LOSS_PERCENT']}%")
         print(f"Cycle: {config['CYCLE_MINUTES']:.1f} minutes")
 
         if config['FORWARD_TESTING']:
-            print("Running in PAPER TRADING mode (using live exchange dummy)")
+            print("Running in FORWARD TESTING mode (real data, no execution - notifications only)")
             api_key = config['EXCHANGE_API_KEY']
             api_secret = config['EXCHANGE_API_SECRET']
             exchange = BitunixFutures(api_key, api_secret, config)
@@ -130,13 +129,6 @@ async def main():
                 raise ValueError("Bitunix API keys required for live trading")
 
             print("LIVE TRADING with Bitunix Futures")
-            print("Risk Management Settings:")
-            print(
-                f"   • Max Position Size: {config['MAX_POSITION_SIZE_PCT']*100:.1f}%")
-            print(
-                f"   • Daily Loss Limit: {config['DAILY_LOSS_LIMIT_PCT']*100:.1f}%")
-            print(f"   • Max Drawdown: {config['MAX_DRAWDOWN_PCT']*100:.1f}%")
-            print(f"   • Max Hold Time: {config['MAX_HOLD_HOURS']} hours")
 
             exchange = BitunixFutures(api_key, api_secret, config)
 
@@ -154,7 +146,6 @@ async def main():
                     print("Please check your Bitunix API credentials and ensure your account has sufficient funds.")
                     sys.exit(1)
 
-                config['INITIAL_CAPITAL'] = live_balance
                 print(f"Balance: ${live_balance:,.2f} {config['CURRENCY']}")
                 print(f"Equity: ${equity:,.2f} {config['CURRENCY']}")
 
@@ -174,8 +165,6 @@ async def main():
 
         while True:
             await bot.run_cycle()
-            print(
-                f"--- Cycle finished, waiting {config['CYCLE_MINUTES']:.1f} minutes ---")
             await asyncio.sleep(config['CYCLE_MINUTES'] * 60)
 
     except Exception as e:
