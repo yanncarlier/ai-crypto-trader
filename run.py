@@ -1,5 +1,6 @@
 # run.py
 import asyncio
+import logging
 from core.trader import TradingBot
 from exchanges.bitunix import BitunixFutures
 import os
@@ -66,13 +67,14 @@ def get_config() -> Dict[str, Any]:
 
             # AI Prompt Configuration
             'MAX_RISK_PERCENT': get_env_float('MAX_RISK_PERCENT', 1.0),
-            'DEFAULT_SL_PERCENT': get_env_float('DEFAULT_SL_PERCENT', 0.8),
-            'DEFAULT_TP_PERCENT': get_env_float('DEFAULT_TP_PERCENT', 2.0),
+            'MIN_RISK_REWARD_RATIO': get_env_float('MIN_RISK_REWARD_RATIO', 2.0),
+            'CONFIDENCE_THRESHOLD': get_env_float('CONFIDENCE_THRESHOLD', 0.7),
+            'WEEKLY_GROWTH_TARGET': get_env_float('WEEKLY_GROWTH_TARGET', 5.0),
             'RSI_PERIOD': get_env_int('RSI_PERIOD', 14),
             'EMA_PERIOD': get_env_int('EMA_PERIOD', 20),
             'BB_PERIOD': get_env_int('BB_PERIOD', 20),
             'LONG_TF_MULTIPLIER': get_env_int('LONG_TF_MULTIPLIER', 4),
-            'OHLCV_LIMIT': get_env_int('OHLCV_LIMIT', 15),
+            'OHLCV_LIMIT': get_env_int('OHLCV_LIMIT', 7),
 
             # Configuration
             'FORWARD_TESTING': get_env_bool('FORWARD_TESTING', False),
@@ -110,11 +112,17 @@ async def main():
     try:
         config = get_config()
         configure_logger(config['RUN_NAME'])
+
+        # Initialize app logger for startup info
+        app_logger = logging.getLogger("app")
+
         # Show configuration
         mode = "PAPER" if config['FORWARD_TESTING'] else "LIVE"
         print(f"Bitunix Futures Trader | {mode} | {config['LLM_PROVIDER']}")
         print(f"Symbol: {config['SYMBOL']} | Leverage: {config['LEVERAGE']}x")
         print(f"Cycle: {config['CYCLE_MINUTES']:.1f} minutes")
+
+        app_logger.info(f"Bot started | Mode: {mode} | Symbol: {config['SYMBOL']} | Leverage: {config['LEVERAGE']}x | Cycle: {config['CYCLE_MINUTES']:.1f}min")
 
         if config['FORWARD_TESTING']:
             print("Running in FORWARD TESTING mode (real data, no execution - notifications only)")

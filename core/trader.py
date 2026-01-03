@@ -26,6 +26,7 @@ class TradingBot:
         self.config = config
         self.exchange = exchange
         self.logger = logging.getLogger("trade")
+        self.app_logger = logging.getLogger("app")
         self.risk_manager = RiskManager(self.config, self.exchange)
         self.current_position = None
         self.last_trade_time = None
@@ -64,6 +65,11 @@ class TradingBot:
             await self._update_position_from_exchange()
             # Monitor current position for SL/TP/hold time
             await self.monitor_positions()
+
+            # Log cycle start with key info
+            account_balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
+            position_status = f"{self.current_position['side']} {self.current_position['quantity']}@{self.current_position['entry_price']:.0f}" if self.current_position else "No position"
+            self.app_logger.info(f"Cycle start | Equity: ${account_balance:,.0f} | Position: {position_status}")
 
             # Fetch market data
             ohlcv = await self.exchange.get_ohlcv(
@@ -150,6 +156,9 @@ class TradingBot:
                 'HOLD': 'HOLD',
                 'NO_TRADE': 'NO_TRADE'
             }.get(ai_decision['action'], ai_decision['action'])
+
+            # Log AI decision
+            self.app_logger.info(f"AI Decision: {ai_action_display} | Confidence: {ai_decision['confidence']:.2f} | Price: ${current_price:,.1f}")
 
             # Check risk management
             if not await self.risk_manager.can_trade(ai_decision, current_price, self.current_position):

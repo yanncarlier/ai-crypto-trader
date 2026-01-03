@@ -29,11 +29,14 @@ def build_prompt(
 
     # AI prompt configuration
     max_risk_pct = config.get('MAX_RISK_PERCENT', 1.0)
+    min_rr_ratio = config.get('MIN_RISK_REWARD_RATIO', 2.0)
+    confidence_threshold = config.get('CONFIDENCE_THRESHOLD', 0.7)
+    weekly_growth_target = config.get('WEEKLY_GROWTH_TARGET', 5.0)
     rsi_period = config.get('RSI_PERIOD', 14)
     ema_period = config.get('EMA_PERIOD', 20)
     bb_period = config.get('BB_PERIOD', 20)
     long_tf_multiplier = config.get('LONG_TF_MULTIPLIER', 4)
-    ohlcv_limit = config.get('OHLCV_LIMIT', 15)
+    ohlcv_limit = config.get('OHLCV_LIMIT', 7)
 
     # Open positions (compact)
     positions_str = "\n".join([
@@ -64,52 +67,38 @@ def build_prompt(
     price_diff_pct = indicators.get('price_diff_pct', 0)
 
     return f"""
-You are a professional {crypto_name} scalper: grow equity, preserve capital strictly.
+You are an aggressive {crypto_name} momentum trader: compound equity growth through decisive trend following.
 
-Cycle: every {cycle_minutes} min
+TARGET: {weekly_growth_target:.1f}% weekly growth through consistent 2-3x risk-reward trades.
 
 STATE:
-- Time: {timestamp.isoformat()}
 - Equity: ${equity:,.0f} {currency}
 - Positions: {positions_str}
 
-CURRENT PRICE:
-- Candle Close: ${candle_price:,.1f}
-- Live Price: ${live_price:,.1f}
-- Difference: ${price_diff:+,.1f} ({price_diff_pct:+.2f}%)
-
-PRICE:
+TREND ANALYSIS:
 {format_ohlcv(price_history_short, short_tf, ohlcv_limit)}
 {format_ohlcv(price_history_long, long_tf, ohlcv_limit)}
 
-INDICATORS:
-- RSI({rsi_period}): {indicators.get('RSI', 'N/A')}
-- MACD: hist {indicators.get('MACD', {}).get('hist', 'N/A')} | signal {indicators.get('MACD', {}).get('signal', 'N/A')}
-- EMA{ema_period}: {indicators.get('EMA_20', 'N/A'):,.1f}
-- BB({bb_period}): U {indicators.get('BB_upper', 'N/A'):,.1f} | M {indicators.get('BB_middle', 'N/A'):,.1f} | L {indicators.get('BB_lower', 'N/A'):,.1f} | Pos {indicators.get('bb_position', 'N/A'):.2f}
-- SMA{ema_period}: {indicators.get('sma_20', 'N/A'):,.1f}
-- SMA{ema_period*2}: {indicators.get('sma_50', 'N/A'):,.1f}
+KEY INDICATORS:
 - Trend: {indicators.get('trend', 'N/A')}
+- RSI({rsi_period}): {indicators.get('RSI', 'N/A')}
+- BB Position: {indicators.get('bb_position', 'N/A'):.2f}
 
-SIGNALS:
-- Volatility: ATR({config.get('ATR_PERIOD', 14)}) = {predictive_signals.get('volatility', 'N/A')}
-
-RULES (strict):
+RULES (aggressive):
+- Risk/Reward: Minimum {min_rr_ratio:.1f}x ratio per trade
 - Max risk/trade: {max_risk_pct:.1f}% equity
-- Leverage: {leverage}x
-- Fee: {taker_fee:.2f}%
-- Enter on strong trend alignment between timeframes
-- Exit when AI signals trend reversal
-- Preserve capital, avoid over-leveraging
+- Leverage: {leverage}x optimized for growth
+- Confidence threshold: {confidence_threshold:.1f}+ required
+- Reinvest ALL profits to compound growth
+- Enter strong trends immediately, exit on reversal signals
 
 TASK:
-Analyze {short_tf} vs {long_tf} trend alignment, price action, indicators, order book, sentiment.
-Use tools (web/X search) if real-time context adds value.
+Identify trend direction and momentum strength. Execute high-probability trades with {min_rr_ratio:.1f}x+ targets.
 
-Respond with valid JSON only — no text outside, no markdown:
+Respond with valid JSON only:
 {{
-  "interpretation": "Strong Bullish" | "Bullish" | "Neutral" | "Bearish" | "Strong Bearish",
-  "confidence": 0.0 to 1.0,
-  "action": "OPEN_LONG" | "OPEN_SHORT" | "CLOSE_POSITION" | "HOLD" | "NO_TRADE"
+  "interpretation": "STRONG_UPTREND" | "STRONG_DOWNTREND",
+  "confidence": {confidence_threshold:.1f} to 1.0,
+  "action": "OPEN_LONG" | "OPEN_SHORT" | "CLOSE_POSITION"
 }}
 """.strip()
