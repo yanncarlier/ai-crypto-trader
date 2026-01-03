@@ -411,39 +411,25 @@ class BitunixFutures(BaseExchange):
             raise
 
     async def monitor_positions(self):
-        """Monitor open positions and apply risk management rules"""
+        """Monitor open positions - simplified AI-driven approach"""
         while True:
             try:
                 positions = await self.get_all_positions(self.symbol)
                 for position in positions:
-                    # Check if position is held too long
-                    position_age = (time.time() * 1000 - position.timestamp) / (1000 * 3600)
-                    max_hold_hours = self.risk_manager.risk_params.max_hold_period_hours if self.risk_manager else 24
-                    
-                    if position_age > max_hold_hours:
+                    # Check if position is held too long (use config variable)
+                    position_age_hours = (time.time() * 1000 - position.timestamp) / (1000 * 3600)
+                    max_hold_hours = self.config.get('MAX_POSITION_HOLD_HOURS', 24)
+
+                    if position_age_hours > max_hold_hours:
                         await self.close_position(position, reason="Max hold time reached")
                         continue
-                        
-                    # Check if stop loss or take profit is hit
-                    current_price = await self.get_current_price(position.symbol)
-                    if hasattr(position, 'stop_loss'):
-                        if (position.side == 'BUY' and current_price <= position.stop_loss) or \
-                           (position.side == 'SELL' and current_price >= position.stop_loss):
-                            await self.close_position(position, reason="Stop loss")
-                            continue
-                            
-                    if hasattr(position, 'take_profit'):
-                        if (position.side == 'BUY' and current_price >= position.take_profit) or \
-                           (position.side == 'SELL' and current_price <= position.take_profit):
-                            await self.close_position(position, reason="Take profit")
-                            continue
-                            
+
                 # Sleep before next check
-                await asyncio.sleep(60)  # Check every minute
-                
+                await asyncio.sleep(300)  # Check every 5 minutes (reduced frequency)
+
             except Exception as e:
                 logging.error(f"Error in position monitoring: {e}")
-                await asyncio.sleep(60)  # Wait before retry
+                await asyncio.sleep(300)  # Wait before retry
     
     async def _create_conditional_orders(self, symbol: str, position_size: float, side: str, entry_price: float, 
                                         sl_pct: Optional[float], tp_pct: Optional[float]) -> Dict[str, Any]:

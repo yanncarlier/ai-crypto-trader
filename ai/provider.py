@@ -20,9 +20,9 @@ PROVIDER_CONFIG = {
 
 
 class AIOutlook(BaseModel):
-    interpretation: Literal["Bullish", "Bearish", "Neutral"]
+    interpretation: Literal["STRONG_UPTREND", "STRONG_DOWNTREND"]
     reasons: str = Field(min_length=1)
-    action: Optional[Literal["OPEN_LONG", "OPEN_SHORT", "CLOSE_POSITION", "HOLD", "NO_TRADE"]] = None
+    action: Optional[Literal["OPEN_LONG", "OPEN_SHORT", "CLOSE_POSITION"]] = None
     confidence: Optional[float] = Field(ge=0.0, le=1.0, default=0.5)
 
 
@@ -90,26 +90,24 @@ async def send_request(prompt: str, config: Dict[str, Any], api_key: Optional[st
                 # If interpretation not provided, infer from action if possible
                 if not interpretation and action:
                     interp_map = {
-                        "OPEN_LONG": "Bullish",
-                        "OPEN_SHORT": "Bearish",
-                        "HOLD": "Neutral",
-                        "NO_TRADE": "Neutral",
-                        "CLOSE_POSITION": "Neutral"
+                        "OPEN_LONG": "STRONG_UPTREND",
+                        "OPEN_SHORT": "STRONG_DOWNTREND",
+                        "CLOSE_POSITION": "STRONG_UPTREND"  # Default for close
                     }
-                    interpretation = interp_map.get(action, "Neutral")
+                    interpretation = interp_map.get(action, "STRONG_UPTREND")
                 elif not interpretation:
-                    interpretation = "Neutral"
-                    
+                    interpretation = "STRONG_UPTREND"
+
                 # Validate interpretation matches allowed values
-                if interpretation not in ["Bullish", "Bearish", "Neutral"]:
+                if interpretation not in ["STRONG_UPTREND", "STRONG_DOWNTREND"]:
                     # Map similar strings
                     interpretation_lower = interpretation.lower()
-                    if "bull" in interpretation_lower:
-                        interpretation = "Bullish"
-                    elif "bear" in interpretation_lower:
-                        interpretation = "Bearish"
+                    if "up" in interpretation_lower or "bull" in interpretation_lower or "long" in interpretation_lower:
+                        interpretation = "STRONG_UPTREND"
+                    elif "down" in interpretation_lower or "bear" in interpretation_lower or "short" in interpretation_lower:
+                        interpretation = "STRONG_DOWNTREND"
                     else:
-                        interpretation = "Neutral"
+                        interpretation = "STRONG_UPTREND"
                 
                 # Ensure confidence is within bounds
                 if confidence is not None:
@@ -140,16 +138,16 @@ async def send_request(prompt: str, config: Dict[str, Any], api_key: Optional[st
             logging.getLogger('ai').warning(f"JSON parsing failed: {parse_error}, falling back to keyword detection")
             # Fallback keyword detection
             text = content.lower()
-            if "bullish" in text and "bearish" not in text:
-                interp = "Bullish"
-            elif "bearish" in text:
-                interp = "Bearish"
+            if "bullish" in text or "up" in text or "long" in text:
+                interp = "STRONG_UPTREND"
+            elif "bearish" in text or "down" in text or "short" in text:
+                interp = "STRONG_DOWNTREND"
             else:
-                interp = "Neutral"
+                interp = "STRONG_UPTREND"  # Default to uptrend for action
             return AIOutlook(interpretation=interp, reasons=content[:200], confidence=0.5)
     except Exception as e:
         logging.getLogger('ai').warning(f"AI error: {e}")
-        return AIOutlook(interpretation="Neutral", reasons=f"Error: {e}")
+        return AIOutlook(interpretation="STRONG_UPTREND", reasons=f"Error: {e}")
 
 
 def save_response(outlook: AIOutlook, run_name: str) -> None:

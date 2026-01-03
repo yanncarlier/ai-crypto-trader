@@ -11,6 +11,7 @@ class RiskParameters:
     volatility_adjusted: bool
     atr_period: int
     max_leverage: int
+    max_hold_period_hours: int = 24
 
 
 class RiskManager:
@@ -69,13 +70,19 @@ class RiskManager:
 
         except Exception as e:
             logging.error(f"Error calculating position size: {e}")
-            # Fallback to 1% of balance on error
+            # Fallback to conservative position sizing on error
             try:
                 balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
-                fallback_size = (balance * 0.01) / price
-                return min(position_size, fallback_size), {'error': str(e)}
-            except:
-                return 0.0, {'error': str(e)}
+                # Use 10% of balance as conservative fallback
+                fallback_size = (balance * 0.10) / price
+                # Ensure fallback is reasonable (not too large)
+                max_fallback = position_size * 0.5  # Max 50% of requested size
+                safe_fallback = min(fallback_size, max_fallback)
+                logging.warning(f"Using fallback position size: {safe_fallback}")
+                return safe_fallback, {'error': str(e), 'fallback': True}
+            except Exception as fallback_error:
+                logging.error(f"Fallback position sizing also failed: {fallback_error}")
+                return 0.0, {'error': f"{str(e)} | Fallback failed: {str(fallback_error)}"}
 
     def _calculate_atr(self, df: pd.DataFrame) -> float:
         """Calculate Average True Range (ATR)"""
@@ -119,13 +126,14 @@ class RiskManager:
 
             # Check confidence threshold
             confidence = decision.get('confidence', 0)
-            if confidence < self.config.get('MIN_CONFIDENCE', 0.5):
+            if confidence < self.config.get('CONFIDENCE_THRESHOLD', 0.7):
                 logging.info("AI confidence too low for trade")
                 return False
 
             # Check position size feasibility
             balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
-            proposed_size = balance / current_price  # Use full balance
+            leverage = self.config.get('LEVERAGE', 1)
+            proposed_size = (balance * leverage) / current_price  # Use leveraged position value
             adjusted_size, details = await self.calculate_position_size(self.config['SYMBOL'], current_price, proposed_size)
             if adjusted_size <= 0:
                 logging.warning("Adjusted position size is zero")

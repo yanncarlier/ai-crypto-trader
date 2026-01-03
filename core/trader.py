@@ -180,24 +180,22 @@ class TradingBot:
     def _parse_ai_outlook(self, outlook: AIOutlook) -> Dict[str, Any]:
         """Parse AI outlook into actionable decision."""
         # Use the action provided by the AI, or map interpretation to action if action is not provided
-        if outlook.action and outlook.action in ['OPEN_LONG', 'OPEN_SHORT', 'CLOSE_POSITION', 'HOLD', 'NO_TRADE']:
+        if outlook.action and outlook.action in ['OPEN_LONG', 'OPEN_SHORT', 'CLOSE_POSITION']:
             # Map futures actions to exchange actions
             action_map = {
                 'OPEN_LONG': 'BUY',
                 'OPEN_SHORT': 'SELL',
-                'CLOSE_POSITION': 'CLOSE_POSITION',
-                'HOLD': 'HOLD',
-                'NO_TRADE': 'NO_TRADE'
+                'CLOSE_POSITION': 'CLOSE_POSITION'
             }
             action = action_map[outlook.action]
         else:
-            # Map interpretation to action, default to HOLD if unknown
-            if outlook.interpretation == 'Bullish':
+            # Map interpretation to action - new assertive logic
+            if outlook.interpretation == 'STRONG_UPTREND':
                 action = 'BUY'
-            elif outlook.interpretation == 'Bearish':
+            elif outlook.interpretation == 'STRONG_DOWNTREND':
                 action = 'SELL'
             else:
-                action = 'HOLD'
+                action = 'BUY'  # Default to buying in uptrend
 
         # Use provided confidence, or set defaults based on action
         if outlook.confidence is not None and 0 <= outlook.confidence <= 1:
@@ -216,10 +214,10 @@ class TradingBot:
             quantity = await self._calculate_position_size(current_price)
 
             if quantity <= 0:
-                self.logger.warning(
-                    "Calculated position size is zero or negative")
+                self.logger.warning("Calculated position size is zero or negative")
                 return
 
+            # Execute the trade
             order = await self.exchange.open_position(
                 symbol=symbol,
                 side=side,
@@ -227,41 +225,60 @@ class TradingBot:
             )
 
             if order:
-                self.current_position = {
-                    'side': side,
-                    'quantity': quantity,
-                    'entry_price': current_price,
-                    'timestamp': datetime.now()
-                }
-                self.last_trade_time = datetime.now()
-                self.logger.info(
-                    f"Trade executed: {side} {quantity} {symbol} at {current_price}")
-                balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
-                trade = {
-                    'timestamp': int(datetime.now().timestamp() * 1000),
-                    'side': side,
-                    'quantity': quantity,
-                    'price': current_price,
-                    'pnl': 0.0,
-                    'balance': balance
-                }
-                self.risk_manager.update_trade_history(trade)
+                # Verify position was actually opened by checking exchange state
+                await asyncio.sleep(1)  # Brief delay for exchange to update
+                verified_position = await self.exchange.get_pending_positions(symbol)
+
+                if verified_position and abs(verified_position.size - quantity) < 0.001:  # Allow small rounding difference
+                    self.current_position = {
+                        'side': side,
+                        'quantity': quantity,
+                        'entry_price': current_price,
+                        'timestamp': datetime.now()
+                    }
+                    self.last_trade_time = datetime.now()
+                    self.logger.info(f"Trade executed: {side} {quantity} {symbol} at {current_price}")
+                    balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
+                    trade = {
+                        'timestamp': int(datetime.now().timestamp() * 1000),
+                        'side': side,
+                        'quantity': quantity,
+                        'price': current_price,
+                        'pnl': 0.0,
+                        'balance': balance
+                    }
+                    self.risk_manager.update_trade_history(trade)
+                else:
+                    self.logger.error(f"Position verification failed - exchange state doesn't match expected position")
+                    # Attempt to close any unexpected position
+                    if verified_position:
+                        await self.exchange.close_position(verified_position, "verification_cleanup")
             else:
                 self.logger.error(f"Order failed: {order}")
 
         except Exception as e:
             self.logger.error(f"Error executing trade: {e}")
+            # Reset local position state on error
+            self.current_position = None
 
     async def _calculate_position_size(self, price: float) -> float:
         """Calculate position size based on config and risk."""
         balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
-        position_value = balance  # Use full balance
+        leverage = self.config.get('LEVERAGE', 1)
+
+        # Calculate position value considering leverage
+        # For futures: position_value = balance * leverage
+        position_value = balance * leverage
         quantity = position_value / price
+
+        # Apply risk management percentage
+        max_risk_pct = self.config.get('MAX_RISK_PERCENT', 1.0)
+        quantity = quantity * (max_risk_pct / 100.0)
 
         # Round to 4 decimal places for precision
         quantity = round(quantity, 4)
 
-        self.logger.info(f"Calculated position size: {quantity} {self.config['SYMBOL']}, balance: {balance} USDT, position_value: {position_value} USDT, price: {price}")
+        self.app_logger.info(f"Position size: {quantity} {self.config['SYMBOL']} | Balance: ${balance:,.0f} | Leverage: {leverage}x | Price: ${price:,.1f}")
         return quantity
 
     async def monitor_positions(self):
@@ -271,35 +288,42 @@ class TradingBot:
         pass
 
     async def _close_position(self, side: str, price: float, reason: str):
-        """Close current position."""
+        """Close current position with validation."""
         if not self.current_position:
             return
 
         try:
             symbol = self.config['SYMBOL']
-            quantity = self.current_position['quantity']
+            expected_quantity = self.current_position['quantity']
+            expected_side = self.current_position['side']
 
-            # Get the current position from exchange
+            # Get the current position from exchange and validate it matches expected
             position = await self.exchange.get_pending_positions(symbol)
             if not position:
                 self.logger.warning(f"No open position found for {symbol}")
                 self.current_position = None
                 return
 
-            # Use the proper close_position method
+            # Validate position matches expected
+            if abs(position.size - expected_quantity) > 0.001 or position.side != expected_side:
+                self.logger.error(f"Position mismatch - Expected: {expected_side} {expected_quantity}, Got: {position.side} {position.size}")
+                # Don't close if position doesn't match
+                return
+
+            # Close the validated position
             result = await self.exchange.close_position(position, reason)
             pnl = result.get('pnl', 0.0)
 
             if result.get('order'):
-                self.logger.info(f"Position closed: {reason} at {price}")
+                self.logger.info(f"Position closed: {reason} at ${price:,.1f} | PnL: ${pnl:+.2f}")
                 self.current_position = None
                 self.risk_manager.update_daily_pnl(pnl)
                 # Fetch current balance for trade record
                 balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
                 trade = {
                     'timestamp': int(datetime.now().timestamp() * 1000),
-                    'side': side,
-                    'quantity': quantity,
+                    'side': f'CLOSE_{expected_side}',
+                    'quantity': expected_quantity,
                     'price': price,
                     'pnl': pnl,
                     'balance': balance
@@ -310,3 +334,4 @@ class TradingBot:
 
         except Exception as e:
             self.logger.error(f"Error closing position: {e}")
+            # Don't reset position state on error to avoid state corruption
