@@ -166,9 +166,14 @@ class TradingBot:
                     f"Action: {ai_action_display}, confidence: {ai_decision['confidence']:.2f}")
                 return
 
-            # Execute trade
-            if ai_decision['action'] in ['BUY', 'SELL', 'CLOSE_POSITION']:
+            # Execute trade or close position
+            if ai_decision['action'] in ['BUY', 'SELL']:
                 await self._execute_trade(ai_decision, current_price)
+            elif ai_decision['action'] == 'CLOSE_POSITION':
+                if self.current_position:
+                    await self._close_position(self.current_position['side'], current_price, "AI decision")
+                else:
+                    self.logger.warning("AI requested CLOSE_POSITION but no position is open")
 
             self.logger.info(
                 f"Cycle completed. AI Decision: {ai_action_display}")
