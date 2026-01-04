@@ -273,26 +273,8 @@ class BitunixFutures(BaseExchange):
 
             logging.info(f"Attempting to open position: {side.upper()} {position_size:.4f} {symbol} @ ${current_price:,.2f}")
 
-            # Apply risk management with fallback
-            if self.risk_manager:
-                try:
-                    can_trade, reason = await self.risk_manager.check_risk_limits(symbol)
-                    if not can_trade:
-                        logging.warning(f"Risk check failed: {reason}")
-                        # Allow trade to proceed with smaller size as fallback
-                        position_size = min(position_size, (position_size * 0.1))
-                except Exception as risk_err:
-                    logging.warning(f"Risk check error, proceeding cautiously: {risk_err}")
-
-                # Try to use risk manager for position sizing, but don't fail if it doesn't work
-                if self.risk_manager.risk_params.volatility_adjusted:
-                    try:
-                        adjusted_size, details = await self.risk_manager.calculate_position_size(symbol, current_price, position_size)
-                        if adjusted_size > 0:
-                            position_size = adjusted_size
-                            logging.info(f"Position size adjusted by risk manager: {position_size}")
-                    except Exception as sizing_err:
-                        logging.warning(f"Failed to adjust position size with volatility, using original size: {sizing_err}")
+            # Position size already calculated by trader with risk management
+            # No additional adjustment needed here
 
             if position_size <= 0:
                 logging.error("Position size must be positive")
@@ -325,26 +307,8 @@ class BitunixFutures(BaseExchange):
             logging.info(f"Placing order: {order_data}")
             order = await self._post("/trade/place_order", order_data)
 
-            # Set stop-loss and take-profit levels from config
-            sl_pct = self.config.get('STOP_LOSS_PERCENT', 2.0)  # Stop loss percentage
-            tp_pct = self.config.get('TAKE_PROFIT_PERCENT', 4.0)  # Take profit percentage
-
-            if side.upper() == 'BUY':
-                sl_price = current_price * (1 - sl_pct / 100)
-                tp_price = current_price * (1 + tp_pct / 100)
-            else:  # SELL
-                sl_price = current_price * (1 + sl_pct / 100)
-                tp_price = current_price * (1 - tp_pct / 100)
-
-            # Try to set conditional orders
-            conditional_orders = await self._create_conditional_orders(
-                symbol, position_size, side, current_price, sl_pct, tp_pct
-            )
-
-            if conditional_orders:
-                logging.info(f"✅ Conditional orders set - SL: ${sl_price:,.2f}, TP: ${tp_price:,.2f}")
-            else:
-                logging.info("ℹ️  Conditional orders not supported - SL/TP will be monitored manually")
+            # Note: SL/TP will be monitored manually by the trading bot
+            logging.info("ℹ️  Stop-loss and take-profit will be monitored manually")
 
             # Log the trade
             trade = {

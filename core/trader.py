@@ -33,15 +33,11 @@ class TradingBot:
         self.start_time = datetime.now()
 
     async def _update_position_from_exchange(self):
-        """Update local position state from exchange using account summary (more reliable)."""
+        """Update local position state from exchange using get_pending_positions."""
         try:
-            account_summary = await self.exchange.get_account_summary(self.config['CURRENCY'], self.config['SYMBOL'])
-            positions = account_summary.get('positions', [])
+            position = await self.exchange.get_pending_positions(self.config['SYMBOL'])
 
-            if positions:
-                # For futures, there should only be one position per symbol
-                position = positions[0]  # Take the first position
-
+            if position:
                 # Convert timestamp to datetime, handling both seconds and milliseconds
                 if position.timestamp:
                     # If timestamp is in milliseconds (typical for exchanges), convert by dividing by 1000
@@ -258,28 +254,37 @@ class TradingBot:
             self.logger.info(f"Order response: {order}")
 
             if order:
-                # Simplified position verification - trust the order response and update local state
-                self.current_position = {
-                    'side': side,
-                    'quantity': quantity,
-                    'entry_price': current_price,
-                    'timestamp': datetime.now()
-                }
-                self.last_trade_time = datetime.now()
+                # Verify position was actually opened by fetching from exchange
+                await asyncio.sleep(1)  # Brief delay to allow order processing
+                verified_position = await self.exchange.get_pending_positions(symbol)
+                if verified_position and verified_position.side == side and abs(verified_position.size - quantity) < 0.001:
+                    # Position verified - update local state
+                    self.current_position = {
+                        'side': side,
+                        'quantity': quantity,
+                        'entry_price': verified_position.entry_price,
+                        'timestamp': datetime.fromtimestamp(verified_position.timestamp / 1000) if verified_position.timestamp > 1e10 else datetime.fromtimestamp(verified_position.timestamp)
+                    }
+                    self.last_trade_time = datetime.now()
 
-                self.logger.info(f"Trade executed: {side} {quantity} {symbol} at ${current_price:,.1f}")
-                balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
-                trade = {
-                    'timestamp': int(datetime.now().timestamp() * 1000),
-                    'side': side,
-                    'quantity': quantity,
-                    'price': current_price,
-                    'pnl': 0.0,
-                    'balance': balance
-                }
-                self.risk_manager.update_trade_history(trade)
+                    self.logger.info(f"Trade executed and verified: {side} {quantity} {symbol} at ${verified_position.entry_price:,.1f}")
+                    balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
+                    trade = {
+                        'timestamp': int(datetime.now().timestamp() * 1000),
+                        'side': side,
+                        'quantity': quantity,
+                        'price': verified_position.entry_price,
+                        'pnl': 0.0,
+                        'balance': balance
+                    }
+                    self.risk_manager.update_trade_history(trade)
+                else:
+                    self.logger.error(f"Position verification failed. Expected: {side} {quantity}, Got: {verified_position.side if verified_position else 'None'} {verified_position.size if verified_position else 'N/A'}")
+                    # Reset local state on verification failure
+                    self.current_position = None
             else:
                 self.logger.error(f"Order failed: {order}")
+                self.current_position = None
 
         except Exception as e:
             self.logger.error(f"Error executing trade: {e}")
@@ -369,9 +374,10 @@ class TradingBot:
 
             # Validate position matches expected
             if abs(position.size - expected_quantity) > 0.001 or position.side != expected_side:
-                self.logger.error(f"Position mismatch - Expected: {expected_side} {expected_quantity}, Got: {position.side} {position.size}")
-                # Don't close if position doesn't match
-                return
+                self.logger.warning(f"Position mismatch - Expected: {expected_side} {expected_quantity}, Got: {position.side} {position.size}. Closing current position anyway.")
+                # Update expected values to match current position for closing
+                expected_quantity = position.size
+                expected_side = position.side
 
             # Close the validated position
             result = await self.exchange.close_position(position, reason)
