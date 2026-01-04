@@ -325,29 +325,7 @@ class BitunixFutures(BaseExchange):
             if self.risk_manager:
                 self.risk_manager.update_trade_history(trade)
 
-            # Create TP/SL orders if configured
-            if position_size > 0:
-                sl_pct = self.config.get('STOP_LOSS_PERCENT')
-                tp_pct = self.config.get('TAKE_PROFIT_PERCENT')
-
-                if sl_pct and tp_pct:
-                    # Calculate TP/SL prices
-                    if side.upper() == 'BUY':
-                        sl_price = current_price * (1 - sl_pct / 100)
-                        tp_price = current_price * (1 + tp_pct / 100)
-                    else:  # SELL
-                        sl_price = current_price * (1 + sl_pct / 100)
-                        tp_price = current_price * (1 - tp_pct / 100)
-
-                    # Create conditional orders
-                    conditional_orders = await self._create_conditional_orders(
-                        symbol, position_size, side, current_price, sl_pct, tp_pct
-                    )
-
-                    if conditional_orders.get('stop_loss') or conditional_orders.get('take_profit'):
-                        logging.info(f"✅ Conditional orders created - SL: ${sl_price:,.2f}, TP: ${tp_price:,.2f}")
-                    else:
-                        logging.warning("⚠️  Failed to create conditional TP/SL orders - will monitor manually")
+            # Note: SL/TP will be monitored manually by the trading bot - no conditional orders needed
 
             logging.info(
                 f"✅ Opened {side.upper()} {position_size:.4f} {symbol} @ ${current_price:,.2f}")
@@ -469,31 +447,31 @@ class BitunixFutures(BaseExchange):
                 try:
                     sl_price = entry_price * (1 - sl_pct/100) if side.lower() == 'buy' else entry_price * (1 + sl_pct/100)
                     
-                    # Try with different parameter structure first
+                    # Try STOP_MARKET first (market order when triggered)
                     sl_order_data = {
                         "symbol": symbol,
                         "qty": str(position_size),
                         "side": 'SELL' if side.upper() == 'BUY' else 'BUY',
                         "tradeSide": "CLOSE",
-                        "orderType": "STOP",
-                        "price": str(sl_price),
+                        "orderType": "STOP_MARKET",
                         "stopPrice": str(sl_price),
                         "marginCoin": "USDT",
                         "reduceOnly": True
                     }
-                    
+
                     logging.info(f"Creating stop loss order: {sl_order_data}")
                     sl_result = await self._post("/trade/place_order", sl_order_data)
-                    
+
                     if sl_result and sl_result.get("orderId"):
                         results["stop_loss"] = sl_result
                         logging.info(f"✅ Conditional stop loss created: {sl_result.get('orderId')}")
-                    
+
                 except Exception as sl_cond_err:
                     logging.warning(f"Failed to create conditional stop loss: {sl_cond_err}")
                     try:
-                        # Fallback to standard approach
-                        sl_order_data["orderType"] = "STOP_MARKET"
+                        # Fallback to STOP with limit price
+                        sl_order_data["orderType"] = "STOP"
+                        sl_order_data["price"] = str(sl_price)
                         sl_result = await self._post("/trade/place_order", sl_order_data)
                         if sl_result and sl_result.get("orderId"):
                             results["stop_loss"] = sl_result
@@ -505,32 +483,32 @@ class BitunixFutures(BaseExchange):
             if tp_pct is not None and tp_pct > 0:
                 try:
                     tp_price = entry_price * (1 + tp_pct/100) if side.lower() == 'buy' else entry_price * (1 - tp_pct/100)
-                    
-                    # Try with different parameter structure first
+
+                    # Try TAKE_PROFIT_MARKET first (market order when triggered)
                     tp_order_data = {
                         "symbol": symbol,
                         "qty": str(position_size),
                         "side": 'SELL' if side.upper() == 'BUY' else 'BUY',
                         "tradeSide": "CLOSE",
-                        "orderType": "TAKE_PROFIT",
-                        "price": str(tp_price),
+                        "orderType": "TAKE_PROFIT_MARKET",
                         "stopPrice": str(tp_price),
                         "marginCoin": "USDT",
                         "reduceOnly": True
                     }
-                    
+
                     logging.info(f"Creating take profit order: {tp_order_data}")
                     tp_result = await self._post("/trade/place_order", tp_order_data)
-                    
+
                     if tp_result and tp_result.get("orderId"):
                         results["take_profit"] = tp_result
                         logging.info(f"✅ Conditional take profit created: {tp_result.get('orderId')}")
-                        
+
                 except Exception as tp_cond_err:
                     logging.warning(f"Failed to create conditional take profit: {tp_cond_err}")
                     try:
-                        # Fallback to standard approach
-                        tp_order_data["orderType"] = "TAKE_PROFIT_MARKET"
+                        # Fallback to TAKE_PROFIT with limit price
+                        tp_order_data["orderType"] = "TAKE_PROFIT"
+                        tp_order_data["price"] = str(tp_price)
                         tp_result = await self._post("/trade/place_order", tp_order_data)
                         if tp_result and tp_result.get("orderId"):
                             results["take_profit"] = tp_result
