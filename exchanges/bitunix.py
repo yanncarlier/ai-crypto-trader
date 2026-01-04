@@ -325,6 +325,30 @@ class BitunixFutures(BaseExchange):
             if self.risk_manager:
                 self.risk_manager.update_trade_history(trade)
 
+            # Create TP/SL orders if configured
+            if position_size > 0:
+                sl_pct = self.config.get('STOP_LOSS_PERCENT')
+                tp_pct = self.config.get('TAKE_PROFIT_PERCENT')
+
+                if sl_pct and tp_pct:
+                    # Calculate TP/SL prices
+                    if side.upper() == 'BUY':
+                        sl_price = current_price * (1 - sl_pct / 100)
+                        tp_price = current_price * (1 + tp_pct / 100)
+                    else:  # SELL
+                        sl_price = current_price * (1 + sl_pct / 100)
+                        tp_price = current_price * (1 - tp_pct / 100)
+
+                    # Create conditional orders
+                    conditional_orders = await self._create_conditional_orders(
+                        symbol, position_size, side, current_price, sl_pct, tp_pct
+                    )
+
+                    if conditional_orders.get('stop_loss') or conditional_orders.get('take_profit'):
+                        logging.info(f"✅ Conditional orders created - SL: ${sl_price:,.2f}, TP: ${tp_price:,.2f}")
+                    else:
+                        logging.warning("⚠️  Failed to create conditional TP/SL orders - will monitor manually")
+
             logging.info(
                 f"✅ Opened {side.upper()} {position_size:.4f} {symbol} @ ${current_price:,.2f}")
             return order

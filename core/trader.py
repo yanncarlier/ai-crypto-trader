@@ -31,6 +31,7 @@ class TradingBot:
         self.current_position = None
         self.last_trade_time = None
         self.start_time = datetime.now()
+        self._operation_lock = asyncio.Lock()  # Mutex to prevent concurrent operations
 
     async def _update_position_from_exchange(self):
         """Update local position state from exchange using get_pending_positions."""
@@ -65,6 +66,43 @@ class TradingBot:
         except Exception as e:
             self.logger.warning(f"Failed to update position from exchange: {e}")
             # Keep existing position state on error rather than clearing it
+
+    async def _sync_state_with_exchange(self):
+        """Synchronize local state with exchange state before critical operations."""
+        try:
+            # Get current exchange state
+            exchange_position = await self.exchange.get_pending_positions(self.config['SYMBOL'])
+            exchange_balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
+
+            # Compare with local state
+            local_has_position = self.current_position is not None
+            exchange_has_position = exchange_position is not None
+
+            if local_has_position != exchange_has_position:
+                self.logger.warning(f"State desync detected - Local: {'position' if local_has_position else 'no position'}, Exchange: {'position' if exchange_has_position else 'no position'}")
+                # Update local state to match exchange
+                await self._update_position_from_exchange()
+                return True  # State was corrected
+
+            if local_has_position and exchange_has_position:
+                # Check if position details match
+                local_side = self.current_position['side']
+                local_size = self.current_position['quantity']
+                exchange_side = exchange_position.side
+                exchange_size = exchange_position.size
+
+                size_tolerance = local_size * 0.05  # 5% tolerance for size differences
+                if (local_side != exchange_side or
+                    abs(local_size - exchange_size) > size_tolerance):
+                    self.logger.warning(f"Position details desync - Local: {local_side} {local_size}, Exchange: {exchange_side} {exchange_size}")
+                    await self._update_position_from_exchange()
+                    return True  # State was corrected
+
+            return False  # No correction needed
+
+        except Exception as e:
+            self.logger.error(f"Failed to sync state with exchange: {e}")
+            return False
 
     async def run_cycle(self):
         """Run a single trading cycle: analyze market, get AI decision, execute trade if appropriate."""
@@ -174,14 +212,15 @@ class TradingBot:
                     f"Action: {ai_action_display}, confidence: {ai_decision['confidence']:.2f}")
                 return
 
-            # Execute trade or close position
-            if ai_decision['action'] in ['BUY', 'SELL']:
-                await self._execute_trade(ai_decision, current_price)
-            elif ai_decision['action'] == 'CLOSE_POSITION':
-                if self.current_position:
-                    await self._close_position(self.current_position['side'], current_price, "AI decision")
-                else:
-                    self.logger.warning("AI requested CLOSE_POSITION but no position is open")
+            # Execute trade or close position with mutex protection
+            async with self._operation_lock:
+                if ai_decision['action'] in ['BUY', 'SELL']:
+                    await self._execute_trade(ai_decision, current_price)
+                elif ai_decision['action'] == 'CLOSE_POSITION':
+                    if self.current_position:
+                        await self._close_position(self.current_position['side'], current_price, "AI decision")
+                    else:
+                        self.logger.warning("AI requested CLOSE_POSITION but no position is open")
 
             self.logger.info(
                 f"Cycle completed. AI Decision: {ai_action_display}")
@@ -222,6 +261,11 @@ class TradingBot:
     async def _execute_trade(self, decision: Dict[str, Any], current_price: float):
         """Execute a trade based on AI decision."""
         try:
+            # Sync state with exchange before critical operation
+            state_corrected = await self._sync_state_with_exchange()
+            if state_corrected:
+                self.logger.info("State synchronized with exchange before trade execution")
+
             symbol = self.config['SYMBOL']
             side = decision['action']
             quantity = await self._calculate_position_size(current_price)
@@ -230,34 +274,82 @@ class TradingBot:
                 self.logger.warning("Calculated position size is zero or negative")
                 return
 
-            # Check for existing positions directly from exchange before placing order
+            # Check for existing positions and handle reversals
             existing_position = await self.exchange.get_pending_positions(symbol)
             if existing_position:
-                self.logger.warning(f"Existing position found on exchange: {existing_position.side} {existing_position.size} @ ${existing_position.entry_price:,.0f} - skipping new order")
-                # Update local state to match exchange
-                self.current_position = {
-                    'side': existing_position.side,
-                    'quantity': existing_position.size,
-                    'entry_price': existing_position.entry_price,
-                    'timestamp': datetime.fromtimestamp(existing_position.timestamp / 1000) if existing_position.timestamp > 1e10 else datetime.fromtimestamp(existing_position.timestamp)
-                }
-                return
+                # Handle position reversals - if AI wants opposite direction, close existing first
+                if ((side == 'BUY' and existing_position.side == 'SELL') or
+                    (side == 'SELL' and existing_position.side == 'BUY')):
+                    self.logger.info(f"Position reversal detected: closing {existing_position.side} to open {side}")
+                    close_result = await self.exchange.close_position(existing_position, "Position reversal")
+                    if close_result.get('order'):
+                        # Update local state - position closed
+                        self.current_position = None
+                        self.last_trade_time = datetime.now()
+                        # Record the closing trade
+                        pnl = close_result.get('pnl', 0.0)
+                        balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
+                        close_trade = {
+                            'timestamp': int(datetime.now().timestamp() * 1000),
+                            'side': f'CLOSE_{existing_position.side}',
+                            'quantity': existing_position.size,
+                            'price': await self.exchange.get_current_price(symbol),
+                            'pnl': pnl,
+                            'balance': balance
+                        }
+                        self.risk_manager.update_trade_history(close_trade)
+                        self.risk_manager.update_daily_pnl(pnl)
+                        self.logger.info(f"Closed existing position for reversal: {existing_position.side} {existing_position.size} @ PnL: ${pnl:+.2f}")
+                    else:
+                        self.logger.error("Failed to close existing position for reversal - aborting new order")
+                        return
+                else:
+                    # Same direction - this shouldn't happen with proper AI logic, but handle gracefully
+                    self.logger.warning(f"AI requested {side} but already in {existing_position.side} position - blocking duplicate position")
+                    # Update local state to match exchange
+                    self.current_position = {
+                        'side': existing_position.side,
+                        'quantity': existing_position.size,
+                        'entry_price': existing_position.entry_price,
+                        'timestamp': datetime.fromtimestamp(existing_position.timestamp / 1000) if existing_position.timestamp > 1e10 else datetime.fromtimestamp(existing_position.timestamp)
+                    }
+                    return
 
-            # Execute the trade
-            order = await self.exchange.open_position(
-                symbol=symbol,
-                side=side,
-                size=str(quantity)
-            )
+            # Execute the trade with retry mechanism
+            max_retries = 3
+            retry_delay = 1  # Start with 1 second delay
 
-            # Debug: Log order response details
-            self.logger.info(f"Order response: {order}")
+            for attempt in range(max_retries):
+                try:
+                    order = await self.exchange.open_position(
+                        symbol=symbol,
+                        side=side,
+                        size=str(quantity)
+                    )
+
+                    # Debug: Log order response details
+                    self.logger.info(f"Order response (attempt {attempt + 1}): {order}")
+
+                    if order:
+                        break  # Success, exit retry loop
+
+                except Exception as order_error:
+                    self.logger.warning(f"Order attempt {attempt + 1} failed: {order_error}")
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(retry_delay)
+                        retry_delay *= 2  # Exponential backoff
+                    else:
+                        self.logger.error(f"All {max_retries} order attempts failed")
+                        order = None
 
             if order:
                 # Verify position was actually opened by fetching from exchange
                 await asyncio.sleep(1)  # Brief delay to allow order processing
                 verified_position = await self.exchange.get_pending_positions(symbol)
-                if verified_position and verified_position.side == side and abs(verified_position.size - quantity) < 0.001:
+                # More robust verification with slippage tolerance
+                size_tolerance = quantity * 0.02  # 2% tolerance for size differences
+                if (verified_position and verified_position.side == side and
+                    abs(verified_position.size - quantity) <= size_tolerance):
                     # Position verified - update local state
                     self.current_position = {
                         'side': side,
@@ -370,6 +462,11 @@ class TradingBot:
             return
 
         try:
+            # Sync state with exchange before critical operation
+            state_corrected = await self._sync_state_with_exchange()
+            if state_corrected:
+                self.logger.info("State synchronized with exchange before position closure")
+
             symbol = self.config['SYMBOL']
             expected_quantity = self.current_position['quantity']
             expected_side = self.current_position['side']
@@ -381,12 +478,19 @@ class TradingBot:
                 self.current_position = None
                 return
 
-            # Validate position matches expected
-            if abs(position.size - expected_quantity) > 0.001 or position.side != expected_side:
-                self.logger.warning(f"Position mismatch - Expected: {expected_side} {expected_quantity}, Got: {position.side} {position.size}. Closing current position anyway.")
-                # Update expected values to match current position for closing
-                expected_quantity = position.size
-                expected_side = position.side
+            # Validate position matches expected - STRICT VALIDATION
+            size_tolerance = expected_quantity * 0.01  # 1% tolerance for size differences
+            if abs(position.size - expected_quantity) > size_tolerance or position.side != expected_side:
+                self.logger.error(f"CRITICAL: Position mismatch detected - Expected: {expected_side} {expected_quantity}, Got: {position.side} {position.size}. REFUSING TO CLOSE to prevent wrong position closure.")
+                # Do NOT close the position - this could be catastrophic
+                # Instead, update local state to match exchange and let next cycle handle it
+                self.current_position = {
+                    'side': position.side,
+                    'quantity': position.size,
+                    'entry_price': position.entry_price,
+                    'timestamp': datetime.fromtimestamp(position.timestamp / 1000) if position.timestamp > 1e10 else datetime.fromtimestamp(position.timestamp)
+                }
+                return
 
             # Close the validated position
             result = await self.exchange.close_position(position, reason)
