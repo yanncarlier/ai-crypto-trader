@@ -258,50 +258,26 @@ class TradingBot:
             self.logger.info(f"Order response: {order}")
 
             if order:
-                # Verify position was actually opened by checking account summary (more reliable than position API)
-                await asyncio.sleep(3)  # Shorter delay since account summary might update faster
-                account_summary = await self.exchange.get_account_summary(self.config['CURRENCY'], symbol)
+                # Simplified position verification - trust the order response and update local state
+                self.current_position = {
+                    'side': side,
+                    'quantity': quantity,
+                    'entry_price': current_price,
+                    'timestamp': datetime.now()
+                }
+                self.last_trade_time = datetime.now()
 
-                # Debug: Log account summary details
-                self.logger.info(f"Account summary after order: positions={len(account_summary.get('positions', []))}, equity=${account_summary.get('equity', 0):,.2f}")
-
-                verified_position = None
-                if account_summary.get('positions'):
-                    for pos in account_summary['positions']:
-                        self.logger.info(f"Found position in summary: side={pos.side}, size={pos.size}, entry_price={pos.entry_price}")
-                        if abs(pos.size - quantity) < 0.001:  # Found our position
-                            verified_position = pos
-                            break
-
-                if verified_position:
-                    self.current_position = {
-                        'side': side,
-                        'quantity': quantity,
-                        'entry_price': current_price,
-                        'timestamp': datetime.now()
-                    }
-                    self.last_trade_time = datetime.now()
-                    self.logger.info(f"Trade executed: {side} {quantity} {symbol} at {current_price}")
-                    balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
-                    trade = {
-                        'timestamp': int(datetime.now().timestamp() * 1000),
-                        'side': side,
-                        'quantity': quantity,
-                        'price': current_price,
-                        'pnl': 0.0,
-                        'balance': balance
-                    }
-                    self.risk_manager.update_trade_history(trade)
-                else:
-                    self.logger.error(f"Position verification failed - exchange state doesn't match expected position")
-                    # Debug: More details about the failure
-                    if not verified_position:
-                        self.logger.error("No position found after order placement")
-                    else:
-                        self.logger.error(f"Position size mismatch: expected {quantity}, got {verified_position.size}")
-                    # Attempt to close any unexpected position
-                    if verified_position:
-                        await self.exchange.close_position(verified_position, "verification_cleanup")
+                self.logger.info(f"Trade executed: {side} {quantity} {symbol} at ${current_price:,.1f}")
+                balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
+                trade = {
+                    'timestamp': int(datetime.now().timestamp() * 1000),
+                    'side': side,
+                    'quantity': quantity,
+                    'price': current_price,
+                    'pnl': 0.0,
+                    'balance': balance
+                }
+                self.risk_manager.update_trade_history(trade)
             else:
                 self.logger.error(f"Order failed: {order}")
 
@@ -315,26 +291,64 @@ class TradingBot:
         balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
         leverage = self.config.get('LEVERAGE', 1)
 
-        # Calculate position value considering leverage
-        # For futures: position_value = balance * leverage
-        position_value = balance * leverage
-        quantity = position_value / price
-
-        # Apply risk management percentage
+        # Apply risk management percentage to balance first
         max_risk_pct = self.config.get('MAX_RISK_PERCENT', 1.0)
-        quantity = quantity * (max_risk_pct / 100.0)
+        max_position_value = balance * (max_risk_pct / 100.0)
+
+        # Calculate position value considering leverage
+        # For futures: position_value = max_position_value * leverage
+        position_value = max_position_value * leverage
+        quantity = position_value / price
 
         # Round to 4 decimal places for precision
         quantity = round(quantity, 4)
 
-        self.app_logger.info(f"Position size: {quantity} {self.config['SYMBOL']} | Balance: ${balance:,.0f} | Leverage: {leverage}x | Price: ${price:,.1f}")
+        self.app_logger.info(f"Position size: {quantity} {self.config['SYMBOL']} | Balance: ${balance:,.0f} | Max Risk: {max_risk_pct:.1f}% | Leverage: {leverage}x | Price: ${price:,.1f}")
         return quantity
 
     async def monitor_positions(self):
-        """Monitor open positions - currently just checks for position existence."""
-        # Position monitoring is simplified - no SL/TP checking
-        # Positions will remain open until AI decides to close them
-        pass
+        """Monitor open positions for SL/TP triggers and max hold time."""
+        if not self.current_position:
+            return
+
+        try:
+            current_price = await self.exchange.get_current_price(self.config['SYMBOL'])
+            entry_price = self.current_position['entry_price']
+            side = self.current_position['side']
+
+            # Calculate current PnL
+            if side == 'BUY':
+                pnl_pct = (current_price - entry_price) / entry_price * 100
+            else:  # SELL
+                pnl_pct = (entry_price - current_price) / entry_price * 100
+
+            # Check stop-loss
+            sl_threshold = -self.config.get('STOP_LOSS_PERCENT', 2.0)
+            if pnl_pct <= sl_threshold:
+                self.logger.warning(f"Stop-loss triggered: {pnl_pct:.2f}% loss (threshold: {sl_threshold:.1f}%)")
+                await self._close_position(side, current_price, f"Stop-loss at {sl_threshold:.1f}%")
+                return
+
+            # Check take-profit
+            tp_threshold = self.config.get('TAKE_PROFIT_PERCENT', 4.0)
+            if pnl_pct >= tp_threshold:
+                self.logger.info(f"Take-profit triggered: {pnl_pct:.2f}% profit (threshold: {tp_threshold:.1f}%)")
+                await self._close_position(side, current_price, f"Take-profit at {tp_threshold:.1f}%")
+                return
+
+            # Check max hold time
+            position_age_hours = (datetime.now() - self.current_position['timestamp']).total_seconds() / 3600
+            max_hold_hours = self.config.get('MAX_POSITION_HOLD_HOURS', 24)
+            if position_age_hours >= max_hold_hours:
+                self.logger.info(f"Max hold time reached: {position_age_hours:.1f} hours")
+                await self._close_position(side, current_price, f"Max hold time ({max_hold_hours}h)")
+                return
+
+            # Log position status periodically
+            self.app_logger.debug(f"Position monitoring: {side} | Entry: ${entry_price:,.1f} | Current: ${current_price:,.1f} | PnL: {pnl_pct:+.2f}%")
+
+        except Exception as e:
+            self.logger.error(f"Error monitoring positions: {e}")
 
     async def _close_position(self, side: str, price: float, reason: str):
         """Close current position with validation."""

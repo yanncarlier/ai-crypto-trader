@@ -64,6 +64,8 @@ def get_config() -> Dict[str, Any]:
             # Risk Management
             'VOLATILITY_ADJUSTED': os.environ['VOLATILITY_ADJUSTED'].lower() == 'true',
             'ATR_PERIOD': int(os.environ['ATR_PERIOD']),
+            'STOP_LOSS_PERCENT': get_env_float('STOP_LOSS_PERCENT', 2.0),
+            'TAKE_PROFIT_PERCENT': get_env_float('TAKE_PROFIT_PERCENT', 4.0),
 
             # AI Prompt Configuration
             'MAX_RISK_PERCENT': get_env_float('MAX_RISK_PERCENT', 1.0),

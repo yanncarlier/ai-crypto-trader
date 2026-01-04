@@ -325,9 +325,26 @@ class BitunixFutures(BaseExchange):
             logging.info(f"Placing order: {order_data}")
             order = await self._post("/trade/place_order", order_data)
 
-            # Note: SL/TP will be monitored manually by the trader's monitor_positions() method
-            # Skip setting conditional orders on exchange as they may not be supported
-            logging.info("ℹ️  SL/TP orders will be monitored manually (exchange conditional orders skipped)")
+            # Set stop-loss and take-profit levels from config
+            sl_pct = self.config.get('STOP_LOSS_PERCENT', 2.0)  # Stop loss percentage
+            tp_pct = self.config.get('TAKE_PROFIT_PERCENT', 4.0)  # Take profit percentage
+
+            if side.upper() == 'BUY':
+                sl_price = current_price * (1 - sl_pct / 100)
+                tp_price = current_price * (1 + tp_pct / 100)
+            else:  # SELL
+                sl_price = current_price * (1 + sl_pct / 100)
+                tp_price = current_price * (1 - tp_pct / 100)
+
+            # Try to set conditional orders
+            conditional_orders = await self._create_conditional_orders(
+                symbol, position_size, side, current_price, sl_pct, tp_pct
+            )
+
+            if conditional_orders:
+                logging.info(f"✅ Conditional orders set - SL: ${sl_price:,.2f}, TP: ${tp_price:,.2f}")
+            else:
+                logging.info("ℹ️  Conditional orders not supported - SL/TP will be monitored manually")
 
             # Log the trade
             trade = {

@@ -114,9 +114,14 @@ class RiskManager:
     async def can_trade(self, decision: Dict, current_price: float, current_position: Optional[Dict]) -> bool:
         """Check if a trade can be executed based on risk rules."""
         try:
-            # Check if already in position
-            if current_position:
-                return False  # Only one position at a time
+            # Allow closing positions even if already in one
+            if decision.get('action') == 'CLOSE_POSITION':
+                return True
+
+            # Check if already in position (only block new positions)
+            if current_position and decision.get('action') in ['BUY', 'SELL']:
+                logging.info("Already in position - blocking new trade")
+                return False
 
             # Check overall risk limits
             can_proceed, reason = await self.check_risk_limits(decision.get('symbol', self.config['SYMBOL']))
@@ -126,17 +131,27 @@ class RiskManager:
 
             # Check confidence threshold
             confidence = decision.get('confidence', 0)
-            if confidence < self.config.get('CONFIDENCE_THRESHOLD', 0.7):
-                logging.info("AI confidence too low for trade")
+            min_confidence = self.config.get('CONFIDENCE_THRESHOLD', 0.7)
+            if confidence < min_confidence:
+                logging.info(f"AI confidence {confidence:.2f} below threshold {min_confidence:.2f}")
                 return False
 
             # Check position size feasibility
             balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
             leverage = self.config.get('LEVERAGE', 1)
-            proposed_size = (balance * leverage) / current_price  # Use leveraged position value
-            adjusted_size, details = await self.calculate_position_size(self.config['SYMBOL'], current_price, proposed_size)
-            if adjusted_size <= 0:
-                logging.warning("Adjusted position size is zero")
+            max_risk_pct = self.config.get('MAX_RISK_PERCENT', 1.0)
+
+            # Calculate maximum position value with risk limits
+            max_position_value = balance * (max_risk_pct / 100.0) * leverage
+            proposed_size = max_position_value / current_price
+
+            if proposed_size <= 0:
+                logging.warning("Calculated position size is zero or negative")
+                return False
+
+            # Additional check: ensure position size doesn't exceed exchange limits
+            if proposed_size * current_price > balance * leverage:
+                logging.warning("Position size exceeds leverage limits")
                 return False
 
             return True
