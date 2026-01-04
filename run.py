@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 import sys
 from pathlib import Path
 import signal
-from exchanges.forward_tester import ForwardTester
+
 from typing import Dict, Any
 from utils.logger import configure_logger
 

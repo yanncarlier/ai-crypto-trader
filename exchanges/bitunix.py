@@ -334,9 +334,6 @@ class BitunixFutures(BaseExchange):
             logging.info(f"Placing order: {order_data}")
             order = await self._post("/trade/place_order", order_data)
 
-            # Note: SL/TP will be monitored manually by the trading bot
-            logging.info("ℹ️  Stop-loss and take-profit will be monitored manually")
-
             # Log the trade
             trade = {
                 'symbol': symbol,
@@ -351,8 +348,6 @@ class BitunixFutures(BaseExchange):
 
             if self.risk_manager:
                 self.risk_manager.update_trade_history(trade)
-
-            # Note: SL/TP will be monitored manually by the trading bot - no conditional orders needed
 
             logging.info(
                 f"✅ Opened {side.upper()} {position_size:.4f} {symbol} @ ${current_price:,.2f}")
@@ -448,13 +443,8 @@ class BitunixFutures(BaseExchange):
             try:
                 positions = await self.get_all_positions(self.symbol)
                 for position in positions:
-                    # Check if position is held too long (use config variable)
-                    position_age_hours = (time.time() * 1000 - position.timestamp) / (1000 * 3600)
-                    max_hold_hours = self.config.get('MAX_POSITION_HOLD_HOURS', 24)
-
-                    if position_age_hours > max_hold_hours:
-                        await self.close_position(position, reason="Max hold time reached")
-                        continue
+                    # No max hold time check - positions held until AI decides to close or SL/TP triggers
+                    pass
 
                 # Sleep before next check
                 await asyncio.sleep(300)  # Check every 5 minutes (reduced frequency)

@@ -131,7 +131,7 @@ class RiskManager:
 
             # Check confidence threshold
             confidence = decision.get('confidence', 0)
-            min_confidence = self.config.get('CONFIDENCE_THRESHOLD', 0.7)
+            min_confidence = self.config.get('MIN_CONFIDENCE', 0.7)
             if confidence < min_confidence:
                 logging.info(f"AI confidence {confidence:.2f} below threshold {min_confidence:.2f}")
                 return False

@@ -390,6 +390,13 @@ class TradingBot:
                     }
                     self.last_trade_time = datetime.now()
 
+                    # Create conditional SL/TP orders
+                    sl_pct = self.config.get('STOP_LOSS_PERCENT', 2.0)
+                    tp_pct = self.config.get('TAKE_PROFIT_PERCENT', 4.0)
+                    await self.exchange._create_conditional_orders(
+                        symbol, quantity, side, verified_position.entry_price, sl_pct, tp_pct
+                    )
+
                     self.logger.info(f"Trade executed and verified: {side} {quantity} {symbol} at ${verified_position.entry_price:,.1f}")
                     balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
                     trade = {
@@ -477,48 +484,10 @@ class TradingBot:
         return atr
 
     async def monitor_positions(self):
-        """Monitor open positions for SL/TP triggers and max hold time."""
-        if not self.current_position:
-            return
-
-        try:
-            current_price = await self.exchange.get_current_price(self.config['SYMBOL'])
-            entry_price = self.current_position['entry_price']
-            side = self.current_position['side']
-
-            # Calculate current PnL
-            if side == 'BUY':
-                pnl_pct = (current_price - entry_price) / entry_price * 100
-            else:  # SELL
-                pnl_pct = (entry_price - current_price) / entry_price * 100
-
-            # Check stop-loss
-            sl_threshold = -self.config.get('STOP_LOSS_PERCENT', 2.0)
-            if pnl_pct <= sl_threshold:
-                self.logger.warning(f"Stop-loss triggered: {pnl_pct:.2f}% loss (threshold: {sl_threshold:.1f}%)")
-                await self._close_position(side, current_price, f"Stop-loss at {sl_threshold:.1f}%")
-                return
-
-            # Check take-profit
-            tp_threshold = self.config.get('TAKE_PROFIT_PERCENT', 4.0)
-            if pnl_pct >= tp_threshold:
-                self.logger.info(f"Take-profit triggered: {pnl_pct:.2f}% profit (threshold: {tp_threshold:.1f}%)")
-                await self._close_position(side, current_price, f"Take-profit at {tp_threshold:.1f}%")
-                return
-
-            # Check max hold time
-            position_age_hours = (datetime.now() - self.current_position['timestamp']).total_seconds() / 3600
-            max_hold_hours = self.config.get('MAX_POSITION_HOLD_HOURS', 24)
-            if position_age_hours >= max_hold_hours:
-                self.logger.info(f"Max hold time reached: {position_age_hours:.1f} hours")
-                await self._close_position(side, current_price, f"Max hold time ({max_hold_hours}h)")
-                return
-
-            # Log position status periodically
-            self.app_logger.debug(f"Position monitoring: {side} | Entry: ${entry_price:,.1f} | Current: ${current_price:,.1f} | PnL: {pnl_pct:+.2f}%")
-
-        except Exception as e:
-            self.logger.error(f"Error monitoring positions: {e}")
+        """Monitor open positions - SL/TP handled by exchange conditional orders."""
+        # SL/TP are now handled by conditional orders placed at position opening
+        # No manual monitoring needed
+        pass
 
     async def _close_position(self, side: str, price: float, reason: str):
         """Close current position with validation."""
