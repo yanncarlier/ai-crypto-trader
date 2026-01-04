@@ -163,7 +163,7 @@ class BitunixFutures(BaseExchange):
     async def get_pending_positions(self, symbol: str) -> Optional[Position]:
         try:
             data = await self._get("/position/get_pending_positions",
-                             {"symbol": symbol})
+                             {"symbol": symbol, "marginCoin": "USDT"})
             # Debug: Log the raw API response
             logging.info(f"Position API response for {symbol}: {data}")
 
@@ -195,7 +195,7 @@ class BitunixFutures(BaseExchange):
         """Get all positions for the symbol (should only be one for futures)"""
         try:
             data = await self._get("/position/get_pending_positions",
-                             {"symbol": symbol})
+                             {"symbol": symbol, "marginCoin": "USDT"})
             positions = []
             for pos in data:
                 if float(pos.get("qty", 0)) != 0:
