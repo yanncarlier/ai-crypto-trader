@@ -343,13 +343,18 @@ class TradingBot:
                         order = None
 
             if order:
-                # Verify position was actually opened by fetching from exchange
-                await asyncio.sleep(1)  # Brief delay to allow order processing
-                verified_position = await self.exchange.get_pending_positions(symbol)
-                # More robust verification with slippage tolerance
-                size_tolerance = quantity * 0.02  # 2% tolerance for size differences
-                if (verified_position and verified_position.side == side and
-                    abs(verified_position.size - quantity) <= size_tolerance):
+                # Verify position was actually opened by fetching from exchange with retries
+                verified_position = None
+                size_tolerance = quantity * 0.05  # 5% tolerance for size differences
+                for attempt in range(5):  # Try up to 5 times with 1 second intervals
+                    await asyncio.sleep(1)
+                    verified_position = await self.exchange.get_pending_positions(symbol)
+                    if (verified_position and verified_position.side == side and
+                        abs(verified_position.size - quantity) <= size_tolerance):
+                        break  # Verification successful
+                    verified_position = None  # Reset for retry
+
+                if verified_position:
                     # Position verified - update local state
                     self.current_position = {
                         'side': side,
@@ -371,7 +376,7 @@ class TradingBot:
                     }
                     self.risk_manager.update_trade_history(trade)
                 else:
-                    self.logger.error(f"Position verification failed. Expected: {side} {quantity}, Got: {verified_position.side if verified_position else 'None'} {verified_position.size if verified_position else 'N/A'}")
+                    self.logger.error(f"Position verification failed after retries. Expected: {side} {quantity}, Got: {verified_position.side if verified_position else 'None'} {verified_position.size if verified_position else 'N/A'}")
                     # Reset local state on verification failure
                     self.current_position = None
             else:
@@ -406,11 +411,44 @@ class TradingBot:
         position_value = effective_max_position_value * leverage
         quantity = position_value / price
 
+        # Apply volatility adjustment if enabled
+        if self.config.get('VOLATILITY_ADJUSTED', True):
+            try:
+                ohlcv = await self.exchange.get_ohlcv(self.config['SYMBOL'], timeframe=60, limit=20)
+                if len(ohlcv) >= 15:
+                    df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                    atr = self._calculate_atr(df, self.config.get('ATR_PERIOD', 14))
+                    if atr > 0:
+                        vol_adjustment = 1.0 / (1 + (atr / price) * 10)
+                        quantity *= vol_adjustment
+                        self.logger.info(f"Applied volatility adjustment: {vol_adjustment:.3f} (ATR: {atr:.2f})")
+            except Exception as e:
+                self.logger.warning(f"Failed to apply volatility adjustment: {e}")
+
         # Round to 4 decimal places for precision
         quantity = round(quantity, 4)
 
+        # Enforce minimum position size
+        min_size = 0.001 if 'BTC' in self.config['SYMBOL'] else 0.01  # Adjust for different symbols
+        if quantity < min_size:
+            quantity = min_size
+            self.logger.info(f"Increased position size to minimum: {min_size}")
+
         self.app_logger.info(f"Position size: {quantity} {self.config['SYMBOL']} | Balance: ${balance:,.0f} | Max Risk: {max_risk_pct:.1f}% | Leverage: {leverage}x | Fee Buffer: {fee_buffer:.3f} | Price: ${price:,.1f}")
         return quantity
+
+    def _calculate_atr(self, df: pd.DataFrame, period: int) -> float:
+        """Calculate Average True Range (ATR)"""
+        high = df['high']
+        low = df['low']
+        close = df['close']
+
+        tr1 = high - low
+        tr2 = abs(high - close.shift())
+        tr3 = abs(low - close.shift())
+        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        atr = tr.rolling(window=period).mean().iloc[-1]
+        return atr
 
     async def monitor_positions(self):
         """Monitor open positions for SL/TP triggers and max hold time."""

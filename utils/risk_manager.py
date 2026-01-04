@@ -136,6 +136,15 @@ class RiskManager:
                 logging.info(f"AI confidence {confidence:.2f} below threshold {min_confidence:.2f}")
                 return False
 
+            # Check risk-reward ratio
+            sl_pct = self.config.get('STOP_LOSS_PERCENT', 2.0)
+            tp_pct = self.config.get('TAKE_PROFIT_PERCENT', 4.0)
+            rr_ratio = tp_pct / sl_pct
+            min_rr = self.config.get('MIN_RISK_REWARD_RATIO', 2.0)
+            if rr_ratio < min_rr:
+                logging.info(f"Risk-reward ratio {rr_ratio:.2f} below minimum {min_rr:.2f}")
+                return False
+
             # Check position size feasibility
             balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
             leverage = self.config.get('LEVERAGE', 1)

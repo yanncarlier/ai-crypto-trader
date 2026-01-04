@@ -162,30 +162,43 @@ class BitunixFutures(BaseExchange):
 
     async def get_pending_positions(self, symbol: str) -> Optional[Position]:
         try:
-            data = await self._get("/position/get_pending_positions",
-                             {"symbol": symbol, "marginCoin": "USDT"})
-            # Debug: Log the raw API response
-            logging.info(f"Position API response for {symbol}: {data}")
+            # Try different endpoints for positions
+            endpoints = [
+                "/position/list",
+                "/position/get_positions",
+                "/position/get_pending_positions"
+            ]
 
-            if not data:
-                logging.warning(f"No position data returned for {symbol}")
-                return None
+            for endpoint in endpoints:
+                try:
+                    data = await self._get(endpoint, {"symbol": symbol, "marginCoin": "USDT"})
+                    # Debug: Log the raw API response
+                    logging.info(f"Position API response for {symbol} from {endpoint}: {data}")
 
-            for pos in data:
-                logging.info(f"Checking position: {pos}")
-                qty = float(pos.get("qty", 0))
-                if pos.get("symbol") == symbol and qty != 0:
-                    side = "BUY" if qty > 0 else "SELL"
-                    return Position(
-                        positionId=pos["positionId"],
-                        side=side,
-                        size=abs(qty),
-                        entry_price=float(pos["avgOpenPrice"]),
-                        symbol=symbol,
-                        timestamp=int(pos["cTime"]),
-                    )
-                else:
-                    logging.info(f"Position {pos.get('symbol')} qty {qty} - not matching criteria")
+                    if not data:
+                        continue
+
+                    for pos in data:
+                        logging.info(f"Checking position: {pos}")
+                        qty = float(pos.get("qty", 0))
+                        if pos.get("symbol") == symbol and qty != 0:
+                            side = "BUY" if qty > 0 else "SELL"
+                            return Position(
+                                positionId=pos["positionId"],
+                                side=side,
+                                size=abs(qty),
+                                entry_price=float(pos["avgOpenPrice"]),
+                                symbol=symbol,
+                                timestamp=int(pos["cTime"]),
+                            )
+                        else:
+                            logging.info(f"Position {pos.get('symbol')} qty {qty} - not matching criteria")
+                except Exception as e:
+                    logging.warning(f"Failed to fetch from {endpoint}: {e}")
+                    continue
+
+            logging.warning(f"No position data returned for {symbol} from any endpoint")
+            return None
         except Exception as e:
             logging.warning(f"Failed to fetch positions: {e}")
             logging.warning(f"Exception details: {type(e).__name__}: {e}")
@@ -194,23 +207,37 @@ class BitunixFutures(BaseExchange):
     async def get_all_positions(self, symbol: str) -> List[Position]:
         """Get all positions for the symbol (should only be one for futures)"""
         try:
-            data = await self._get("/position/get_pending_positions",
-                             {"symbol": symbol, "marginCoin": "USDT"})
-            positions = []
-            for pos in data:
-                if float(pos.get("qty", 0)) != 0:
-                    side = "BUY" if float(pos["qty"]) > 0 else "SELL"
-                    # Handle missing cTime field gracefully
-                    timestamp = int(pos.get("cTime", time.time() * 1000))
-                    positions.append(Position(
-                        positionId=pos["positionId"],
-                        side=side,
-                        size=abs(float(pos["qty"])),
-                        entry_price=float(pos["avgOpenPrice"]),
-                        symbol=symbol,
-                        timestamp=timestamp,
-                    ))
-            return positions
+            # Try different endpoints for positions
+            endpoints = [
+                "/position/list",
+                "/position/get_positions",
+                "/position/get_pending_positions"
+            ]
+
+            for endpoint in endpoints:
+                try:
+                    data = await self._get(endpoint, {"symbol": symbol, "marginCoin": "USDT"})
+                    positions = []
+                    for pos in data:
+                        if float(pos.get("qty", 0)) != 0:
+                            side = "BUY" if float(pos["qty"]) > 0 else "SELL"
+                            # Handle missing cTime field gracefully
+                            timestamp = int(pos.get("cTime", time.time() * 1000))
+                            positions.append(Position(
+                                positionId=pos["positionId"],
+                                side=side,
+                                size=abs(float(pos["qty"])),
+                                entry_price=float(pos["avgOpenPrice"]),
+                                symbol=symbol,
+                                timestamp=timestamp,
+                            ))
+                    if positions:  # If we found positions, return them
+                        return positions
+                except Exception as e:
+                    logging.warning(f"Failed to fetch from {endpoint}: {e}")
+                    continue
+
+            return []
         except Exception as e:
             logging.warning(f"Failed to fetch all positions: {e}")
             return []
