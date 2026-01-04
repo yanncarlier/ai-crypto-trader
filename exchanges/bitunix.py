@@ -559,6 +559,47 @@ class BitunixFutures(BaseExchange):
             logging.warning(f"Failed to fetch open orders for {symbol}: {e}")
             return []
 
+    async def get_order_status(self, symbol: str, order_id: str) -> Optional[Dict[str, Any]]:
+        """Get the status of a specific order"""
+        try:
+            data = await self._get("/trade/get_order_details", {
+                "symbol": symbol,
+                "orderId": order_id,
+                "marginCoin": "USDT"
+            })
+
+            if data:
+                # Normalize status to common format
+                status_mapping = {
+                    'filled': 'filled',
+                    'partial_filled': 'partial_filled',
+                    'pending': 'pending',
+                    'cancelled': 'canceled',
+                    'rejected': 'rejected',
+                    'expired': 'expired'
+                }
+
+                raw_status = data.get('status', '').lower()
+                normalized_status = status_mapping.get(raw_status, raw_status)
+
+                return {
+                    'orderId': data.get('orderId'),
+                    'status': normalized_status,
+                    'symbol': data.get('symbol'),
+                    'side': data.get('side'),
+                    'qty': float(data.get('qty', 0)),
+                    'filledQty': float(data.get('filledQty', 0)),
+                    'price': float(data.get('price', 0)),
+                    'avgPrice': float(data.get('avgPrice', 0)),
+                    'type': data.get('orderType'),
+                    'timestamp': data.get('cTime')
+                }
+
+            return None
+        except Exception as e:
+            logging.warning(f"Failed to get order status for {order_id}: {e}")
+            return None
+
     async def cancel_order(self, symbol: str, order_id: str) -> bool:
         """Cancel a specific order"""
         try:

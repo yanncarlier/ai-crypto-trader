@@ -343,11 +343,37 @@ class TradingBot:
                         order = None
 
             if order:
-                # Verify position was actually opened by fetching from exchange with retries
+                # Verify position was actually opened by checking order status and position data
                 verified_position = None
+                order_filled = False
                 size_tolerance = quantity * 0.05  # 5% tolerance for size differences
-                for attempt in range(5):  # Try up to 5 times with 1 second intervals
-                    await asyncio.sleep(1)
+
+                # First, verify the order was filled by checking order status
+                order_id = order.get('orderId')
+                if order_id:
+                    for attempt in range(10):  # Try up to 10 times with increasing delays
+                        await asyncio.sleep(min(1 + attempt * 0.5, 5))  # 1s, 1.5s, 2s, ... up to 5s
+
+                        try:
+                            # Check if order exists and is filled
+                            order_status = await self.exchange.get_order_status(symbol, order_id)
+                            if order_status and order_status.get('status') == 'filled':
+                                order_filled = True
+                                self.logger.info(f"Order {order_id} confirmed filled on attempt {attempt + 1}")
+                                break
+                            elif order_status and order_status.get('status') in ['canceled', 'rejected']:
+                                self.logger.error(f"Order {order_id} was {order_status.get('status')} - aborting verification")
+                                break
+                        except Exception as e:
+                            self.logger.warning(f"Failed to check order status on attempt {attempt + 1}: {e}")
+
+                    if not order_filled:
+                        self.logger.warning(f"Order {order_id} status could not be confirmed as filled")
+
+                # Then verify position exists (with or without order confirmation)
+                for attempt in range(8):  # Try up to 8 times with increasing delays
+                    await asyncio.sleep(min(2 + attempt * 0.5, 8))  # 2s, 2.5s, 3s, ... up to 8s
+
                     verified_position = await self.exchange.get_pending_positions(symbol)
                     if (verified_position and verified_position.side == side and
                         abs(verified_position.size - quantity) <= size_tolerance):
