@@ -342,13 +342,19 @@ class BitunixFutures(BaseExchange):
 
             # Check if in forward testing mode (real data, no execution)
             if self.config.get('FORWARD_TESTING', False):
-                # Calculate PnL
+                # Calculate PnL before fees
                 pnl = (current_price - position.entry_price) * position.size
                 if position.side == 'SELL':
                     pnl = -pnl
 
+                # Deduct taker fee from PnL
+                notional_value = position.size * current_price
+                taker_fee = self.config.get('TAKER_FEE', 0.0006)
+                fee_cost = notional_value * taker_fee
+                pnl -= fee_cost
+
                 logging.info(f"📊 FORWARD TESTING: Would close {position.side} {position.size:.4f} {position.symbol} @ "
-                           f"${current_price:,.2f} | PnL: ${pnl:,.2f} ({reason}) - NOT EXECUTED")
+                           f"${current_price:,.2f} | PnL: ${pnl:,.2f} (fee: ${fee_cost:.2f}) ({reason}) - NOT EXECUTED")
 
                 # Return a mock response
                 mock_order = {
@@ -371,10 +377,16 @@ class BitunixFutures(BaseExchange):
                 "marginCoin": "USDT",
             })
 
-            # Calculate PnL
+            # Calculate PnL before fees
             pnl = (current_price - position.entry_price) * position.size
             if position.side == 'SELL':
                 pnl = -pnl
+
+            # Deduct taker fee from PnL
+            notional_value = position.size * current_price
+            taker_fee = self.config.get('TAKER_FEE', 0.0006)
+            fee_cost = notional_value * taker_fee
+            pnl -= fee_cost
 
             # Log the trade
             trade = {
@@ -550,21 +562,24 @@ class BitunixFutures(BaseExchange):
         """Instantly close any open position for the symbol"""
         position = await self.get_pending_positions(symbol)
         if position:
-            # Calculate PnL before closing
+            # Calculate PnL before closing (fees will be deducted in close_position)
             current_price = await self.get_current_price(symbol)
             pnl = (current_price - position.entry_price) * position.size
             if position.side == 'SELL':
                 pnl = -pnl
-            pnl_pct = (pnl / (position.entry_price * position.size)) * 100 if (position.entry_price * position.size) != 0 else 0
 
-            # Close the position
-            await self.close_position(position, reason="Emergency close")
+            # Close the position (this will deduct fees)
+            result = await self.close_position(position, reason="Emergency close")
+            final_pnl = result.get('pnl', pnl)
+
+            # Calculate percentage after fees
+            pnl_pct = (final_pnl / (position.entry_price * position.size)) * 100 if (position.entry_price * position.size) != 0 else 0
 
             # Log concise closing details
             logging.info(
-                f"🔒 Closed {position.side} {position.size:.4f} {symbol} | PnL: ${pnl:+.2f} ({pnl_pct:+.2f}%)")
+                f"🔒 Closed {position.side} {position.size:.4f} {symbol} | PnL: ${final_pnl:+.2f} ({pnl_pct:+.2f}%)")
             return
-        
+
         logging.info(f"No open position found for {symbol} to flash close.")
 
     async def fetch_ohlcv(self, symbol: str, timeframe: str = "1m", limit: int = 15) -> list:

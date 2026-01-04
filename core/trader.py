@@ -292,7 +292,7 @@ class TradingBot:
             self.current_position = None
 
     async def _calculate_position_size(self, price: float) -> float:
-        """Calculate position size based on config and risk."""
+        """Calculate position size based on config and risk, accounting for trading fees."""
         balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
         leverage = self.config.get('LEVERAGE', 1)
 
@@ -300,15 +300,24 @@ class TradingBot:
         max_risk_pct = self.config.get('MAX_RISK_PERCENT', 1.0)
         max_position_value = balance * (max_risk_pct / 100.0)
 
+        # Account for trading fees - estimate fee impact on position sizing
+        # Since fees are deducted on exit, we need to ensure we can withstand the fee cost
+        taker_fee = self.config.get('TAKER_FEE', 0.0006)  # 0.06% default
+        # Conservative estimate: assume we might pay fees twice (entry + exit in worst case)
+        fee_buffer = taker_fee * 2  # 0.12% total fee buffer
+
+        # Adjust position value to account for fees
+        effective_max_position_value = max_position_value * (1 - fee_buffer)
+
         # Calculate position value considering leverage
-        # For futures: position_value = max_position_value * leverage
-        position_value = max_position_value * leverage
+        # For futures: position_value = effective_max_position_value * leverage
+        position_value = effective_max_position_value * leverage
         quantity = position_value / price
 
         # Round to 4 decimal places for precision
         quantity = round(quantity, 4)
 
-        self.app_logger.info(f"Position size: {quantity} {self.config['SYMBOL']} | Balance: ${balance:,.0f} | Max Risk: {max_risk_pct:.1f}% | Leverage: {leverage}x | Price: ${price:,.1f}")
+        self.app_logger.info(f"Position size: {quantity} {self.config['SYMBOL']} | Balance: ${balance:,.0f} | Max Risk: {max_risk_pct:.1f}% | Leverage: {leverage}x | Fee Buffer: {fee_buffer:.3f} | Price: ${price:,.1f}")
         return quantity
 
     async def monitor_positions(self):
