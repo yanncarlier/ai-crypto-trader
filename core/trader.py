@@ -32,6 +32,7 @@ class TradingBot:
         self.last_trade_time = None
         self.start_time = datetime.now()
         self._operation_lock = asyncio.Lock()  # Mutex to prevent concurrent operations
+        self._state_monitor_task = None  # Background state monitoring task
 
     async def _update_position_from_exchange(self):
         """Update local position state from exchange using get_pending_positions."""
@@ -66,6 +67,96 @@ class TradingBot:
         except Exception as e:
             self.logger.warning(f"Failed to update position from exchange: {e}")
             # Keep existing position state on error rather than clearing it
+
+    async def _comprehensive_state_sync(self):
+        """Comprehensive state synchronization on cycle start - checks positions, orders, and detects external changes."""
+        try:
+            symbol = self.config['SYMBOL']
+            state_changes_detected = []
+
+            # 1. Sync position state
+            exchange_position = await self.exchange.get_pending_positions(symbol)
+            local_has_position = self.current_position is not None
+            exchange_has_position = exchange_position is not None
+
+            if local_has_position != exchange_has_position:
+                state_changes_detected.append(f"Position existence mismatch - Local: {'position' if local_has_position else 'no position'}, Exchange: {'position' if exchange_has_position else 'no position'}")
+                await self._update_position_from_exchange()
+                if exchange_has_position:
+                    state_changes_detected.append(f"Externally opened position detected: {exchange_position.side} {exchange_position.size}")
+                else:
+                    state_changes_detected.append("External position closure detected")
+
+            elif local_has_position and exchange_has_position:
+                # Check position details
+                local_side = self.current_position['side']
+                local_size = self.current_position['quantity']
+                exchange_side = exchange_position.side
+                exchange_size = exchange_position.size
+
+                size_tolerance = local_size * 0.05  # 5% tolerance
+                if local_side != exchange_side or abs(local_size - exchange_size) > size_tolerance:
+                    state_changes_detected.append(f"Position details changed - Local: {local_side} {local_size}, Exchange: {exchange_side} {exchange_size}")
+                    await self._update_position_from_exchange()
+
+            # 2. Verify and sync order status if we have a position
+            if self.current_position:
+                sl_order_id = self.current_position.get('sl_order_id')
+                tp_order_id = self.current_position.get('tp_order_id')
+
+                # Check SL order status
+                if sl_order_id:
+                    try:
+                        sl_status = await self.exchange.get_order_status(symbol, sl_order_id)
+                        if sl_status and sl_status.get('status') in ['filled', 'canceled', 'expired']:
+                            state_changes_detected.append(f"SL order {sl_order_id} status: {sl_status.get('status')}")
+                            if sl_status.get('status') == 'filled':
+                                state_changes_detected.append("SL order triggered externally - position should be closed")
+                                await self._update_position_from_exchange()
+                    except Exception as e:
+                        self.logger.warning(f"Failed to check SL order {sl_order_id}: {e}")
+
+                # Check TP order status
+                if tp_order_id:
+                    try:
+                        tp_status = await self.exchange.get_order_status(symbol, tp_order_id)
+                        if tp_status and tp_status.get('status') in ['filled', 'canceled', 'expired']:
+                            state_changes_detected.append(f"TP order {tp_order_id} status: {tp_status.get('status')}")
+                            if tp_status.get('status') == 'filled':
+                                state_changes_detected.append("TP order triggered externally - position should be closed")
+                                await self._update_position_from_exchange()
+                    except Exception as e:
+                        self.logger.warning(f"Failed to check TP order {tp_order_id}: {e}")
+
+            # 3. Check for any unexpected open orders
+            try:
+                open_orders = await self.exchange.get_open_orders(symbol)
+                if open_orders:
+                    expected_orders = set()
+                    if self.current_position:
+                        if self.current_position.get('sl_order_id'):
+                            expected_orders.add(self.current_position['sl_order_id'])
+                        if self.current_position.get('tp_order_id'):
+                            expected_orders.add(self.current_position['tp_order_id'])
+
+                    unexpected_orders = [order for order in open_orders if order.get('orderId') not in expected_orders]
+                    if unexpected_orders:
+                        state_changes_detected.append(f"Unexpected open orders detected: {[order.get('orderId') for order in unexpected_orders]}")
+            except Exception as e:
+                self.logger.warning(f"Failed to check open orders: {e}")
+
+            # Log state changes if any were detected
+            if state_changes_detected:
+                self.logger.info(f"State synchronization detected {len(state_changes_detected)} changes:")
+                for change in state_changes_detected:
+                    self.logger.info(f"  - {change}")
+                return True
+
+            return False
+
+        except Exception as e:
+            self.logger.error(f"Error in comprehensive state sync: {e}")
+            return False
 
     async def _sync_state_with_exchange(self):
         """Synchronize local state with exchange state before critical operations."""
@@ -107,8 +198,11 @@ class TradingBot:
     async def run_cycle(self):
         """Run a single trading cycle: analyze market, get AI decision, execute trade if appropriate."""
         try:
-            # Update local position state from exchange
-            await self._update_position_from_exchange()
+            # Comprehensive state synchronization on cycle start
+            state_changes = await self._comprehensive_state_sync()
+            if state_changes:
+                self.logger.info("State synchronization completed on cycle start")
+
             # Monitor current position for SL/TP/hold time
             await self.monitor_positions()
 
@@ -281,28 +375,16 @@ class TradingBot:
                 if ((side == 'BUY' and existing_position.side == 'SELL') or
                     (side == 'SELL' and existing_position.side == 'BUY')):
                     self.logger.info(f"Position reversal detected: closing {existing_position.side} to open {side}")
-                    close_result = await self.exchange.close_position(existing_position, "Position reversal")
-                    if close_result.get('order'):
-                        # Update local state - position closed
-                        self.current_position = None
-                        self.last_trade_time = datetime.now()
-                        # Record the closing trade
-                        pnl = close_result.get('pnl', 0.0)
-                        balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
-                        close_trade = {
-                            'timestamp': int(datetime.now().timestamp() * 1000),
-                            'side': f'CLOSE_{existing_position.side}',
-                            'quantity': existing_position.size,
-                            'price': await self.exchange.get_current_price(symbol),
-                            'pnl': pnl,
-                            'balance': balance
-                        }
-                        self.risk_manager.update_trade_history(close_trade)
-                        self.risk_manager.update_daily_pnl(pnl)
-                        self.logger.info(f"Closed existing position for reversal: {existing_position.side} {existing_position.size} @ PnL: ${pnl:+.2f}")
-                    else:
-                        self.logger.error("Failed to close existing position for reversal - aborting new order")
-                        return
+                    # Create a position dict for _close_position
+                    position_dict = {
+                        'side': existing_position.side,
+                        'quantity': existing_position.size,
+                        'entry_price': existing_position.entry_price,
+                        'sl_order_id': getattr(existing_position, 'sl_order_id', None),
+                        'tp_order_id': getattr(existing_position, 'tp_order_id', None)
+                    }
+                    await self._close_position(position_dict['side'], await self.exchange.get_current_price(symbol), "Position reversal")
+                    # _close_position updates self.current_position to None on success
                 else:
                     # Same direction - this shouldn't happen with proper AI logic, but handle gracefully
                     self.logger.warning(f"AI requested {side} but already in {existing_position.side} position - blocking duplicate position")
@@ -311,7 +393,9 @@ class TradingBot:
                         'side': existing_position.side,
                         'quantity': existing_position.size,
                         'entry_price': existing_position.entry_price,
-                        'timestamp': datetime.fromtimestamp(existing_position.timestamp / 1000) if existing_position.timestamp > 1e10 else datetime.fromtimestamp(existing_position.timestamp)
+                        'timestamp': datetime.fromtimestamp(existing_position.timestamp / 1000) if existing_position.timestamp > 1e10 else datetime.fromtimestamp(existing_position.timestamp),
+                        'sl_order_id': getattr(existing_position, 'sl_order_id', None),
+                        'tp_order_id': getattr(existing_position, 'tp_order_id', None)
                     }
                     return
 
@@ -393,9 +477,19 @@ class TradingBot:
                     # Create conditional SL/TP orders
                     sl_pct = self.config.get('STOP_LOSS_PERCENT', 2.0)
                     tp_pct = self.config.get('TAKE_PROFIT_PERCENT', 4.0)
-                    await self.exchange._create_conditional_orders(
+                    conditional_results = await self.exchange._create_conditional_orders(
                         symbol, quantity, side, verified_position.entry_price, sl_pct, tp_pct
                     )
+
+                    # Store SL/TP order IDs in position state
+                    self.current_position['sl_order_id'] = conditional_results.get('sl_order_id')
+                    self.current_position['tp_order_id'] = conditional_results.get('tp_order_id')
+
+                    # Log warnings if SL/TP failed to create
+                    if not conditional_results.get('sl_success', False):
+                        self.logger.warning("Stop loss order failed to create - position unprotected")
+                    if not conditional_results.get('tp_success', False):
+                        self.logger.warning("Take profit order failed to create - position may stay open")
 
                     self.logger.info(f"Trade executed and verified: {side} {quantity} {symbol} at ${verified_position.entry_price:,.1f}")
                     balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
@@ -484,10 +578,53 @@ class TradingBot:
         return atr
 
     async def monitor_positions(self):
-        """Monitor open positions - SL/TP handled by exchange conditional orders."""
-        # SL/TP are now handled by conditional orders placed at position opening
-        # No manual monitoring needed
-        pass
+        """Monitor open positions for SL/TP status and max hold time."""
+        if not self.current_position:
+            return
+
+        try:
+            symbol = self.config['SYMBOL']
+            max_hold_hours = self.config.get('MAX_POSITION_HOLD_HOURS', 24)
+            position_age_hours = (datetime.now() - self.current_position['timestamp']).total_seconds() / 3600
+
+            # Check max hold time
+            if position_age_hours > max_hold_hours:
+                self.logger.warning(f"Position exceeded max hold time ({max_hold_hours}h). Force closing.")
+                await self._close_position(self.current_position['side'], await self.exchange.get_current_price(symbol), f"Max hold time exceeded ({position_age_hours:.1f}h)")
+                return
+
+            # Check SL/TP order status
+            sl_order_id = self.current_position.get('sl_order_id')
+            tp_order_id = self.current_position.get('tp_order_id')
+
+            if sl_order_id:
+                try:
+                    sl_status = await self.exchange.get_order_status(symbol, sl_order_id)
+                    if sl_status and sl_status.get('status') in ['filled', 'canceled', 'expired']:
+                        self.logger.warning(f"SL order {sl_order_id} status: {sl_status.get('status')}")
+                        if sl_status.get('status') == 'filled':
+                            # SL was triggered, position should be closed
+                            self.logger.info("SL order filled - position should be closed by exchange")
+                            # Update local state
+                            await self._update_position_from_exchange()
+                except Exception as e:
+                    self.logger.warning(f"Failed to check SL order {sl_order_id} status: {e}")
+
+            if tp_order_id:
+                try:
+                    tp_status = await self.exchange.get_order_status(symbol, tp_order_id)
+                    if tp_status and tp_status.get('status') in ['filled', 'canceled', 'expired']:
+                        self.logger.warning(f"TP order {tp_order_id} status: {tp_status.get('status')}")
+                        if tp_status.get('status') == 'filled':
+                            # TP was triggered, position should be closed
+                            self.logger.info("TP order filled - position should be closed by exchange")
+                            # Update local state
+                            await self._update_position_from_exchange()
+                except Exception as e:
+                    self.logger.warning(f"Failed to check TP order {tp_order_id} status: {e}")
+
+        except Exception as e:
+            self.logger.error(f"Error in position monitoring: {e}")
 
     async def _close_position(self, side: str, price: float, reason: str):
         """Close current position with validation."""
@@ -510,6 +647,30 @@ class TradingBot:
                 self.logger.warning(f"No open position found for {symbol}")
                 self.current_position = None
                 return
+
+            # Cancel SL/TP orders before closing position
+            sl_order_id = self.current_position.get('sl_order_id')
+            tp_order_id = self.current_position.get('tp_order_id')
+
+            if sl_order_id:
+                try:
+                    cancelled = await self.exchange.cancel_order(symbol, sl_order_id)
+                    if cancelled:
+                        self.logger.info(f"Cancelled SL order {sl_order_id} before closing position")
+                    else:
+                        self.logger.warning(f"Failed to cancel SL order {sl_order_id}")
+                except Exception as e:
+                    self.logger.warning(f"Error cancelling SL order {sl_order_id}: {e}")
+
+            if tp_order_id:
+                try:
+                    cancelled = await self.exchange.cancel_order(symbol, tp_order_id)
+                    if cancelled:
+                        self.logger.info(f"Cancelled TP order {tp_order_id} before closing position")
+                    else:
+                        self.logger.warning(f"Failed to cancel TP order {tp_order_id}")
+                except Exception as e:
+                    self.logger.warning(f"Error cancelling TP order {tp_order_id}: {e}")
 
             # Validate position matches expected - STRICT VALIDATION
             size_tolerance = expected_quantity * 0.01  # 1% tolerance for size differences
@@ -550,3 +711,95 @@ class TradingBot:
         except Exception as e:
             self.logger.error(f"Error closing position: {e}")
             # Don't reset position state on error to avoid state corruption
+
+    async def initialize_state_sync(self):
+        """Initialize state synchronization on bot startup - comprehensive check of all positions and orders."""
+        try:
+            self.logger.info("Performing initial state synchronization...")
+
+            # Perform comprehensive state sync
+            state_changes = await self._comprehensive_state_sync()
+
+            # Also check for any historical positions/orders that might need cleanup
+            symbol = self.config['SYMBOL']
+
+            # Check for any open orders that might be orphaned
+            try:
+                open_orders = await self.exchange.get_open_orders(symbol)
+                if open_orders:
+                    self.logger.info(f"Found {len(open_orders)} open orders on startup")
+                    for order in open_orders:
+                        self.logger.info(f"  Order {order.get('orderId')}: {order.get('side')} {order.get('qty')} @ {order.get('price')} ({order.get('orderType')})")
+            except Exception as e:
+                self.logger.warning(f"Failed to check open orders on startup: {e}")
+
+            # Check account balance
+            try:
+                balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
+                self.logger.info(f"Account balance on startup: ${balance:,.2f}")
+            except Exception as e:
+                self.logger.warning(f"Failed to check account balance on startup: {e}")
+
+            if state_changes:
+                self.logger.info("Initial state synchronization completed with changes detected")
+            else:
+                self.logger.info("Initial state synchronization completed - no discrepancies found")
+
+        except Exception as e:
+            self.logger.error(f"Error during initial state sync: {e}")
+
+    async def _continuous_state_monitor(self):
+        """Continuous background monitoring for state changes between cycles."""
+        monitor_interval = 300  # Check every 5 minutes
+
+        while True:
+            try:
+                await asyncio.sleep(monitor_interval)
+
+                # Only perform monitoring if we have an active position
+                if self.current_position:
+                    self.logger.debug("Performing background state check...")
+
+                    # Quick check for position state changes
+                    exchange_position = await self.exchange.get_pending_positions(self.config['SYMBOL'])
+                    local_has_position = self.current_position is not None
+                    exchange_has_position = exchange_position is not None
+
+                    if not exchange_has_position and local_has_position:
+                        # Position was closed externally
+                        self.logger.warning("Background monitor: Position closed externally")
+                        await self._update_position_from_exchange()
+                        continue
+
+                    if exchange_has_position and local_has_position:
+                        # Check if position details changed
+                        local_side = self.current_position['side']
+                        local_size = self.current_position['quantity']
+                        exchange_side = exchange_position.side
+                        exchange_size = exchange_position.size
+
+                        size_tolerance = local_size * 0.05
+                        if local_side != exchange_side or abs(local_size - exchange_size) > size_tolerance:
+                            self.logger.warning(f"Background monitor: Position details changed - Local: {local_side} {local_size}, Exchange: {exchange_side} {exchange_size}")
+                            await self._update_position_from_exchange()
+
+            except Exception as e:
+                self.logger.warning(f"Error in continuous state monitor: {e}")
+                await asyncio.sleep(monitor_interval)  # Wait before retry
+
+    async def start_background_monitoring(self):
+        """Start the background state monitoring task."""
+        if not self._state_monitor_task:
+            self._state_monitor_task = asyncio.create_task(self._continuous_state_monitor())
+            self.logger.info("Background state monitoring started")
+
+    async def stop_background_monitoring(self):
+        """Stop the background state monitoring task."""
+        if self._state_monitor_task:
+            self._state_monitor_task.cancel()
+            try:
+                await self._state_monitor_task
+            except asyncio.CancelledError:
+                pass
+            self._state_monitor_task = None
+            self.logger.info("Background state monitoring stopped")

@@ -453,91 +453,125 @@ class BitunixFutures(BaseExchange):
                 logging.error(f"Error in position monitoring: {e}")
                 await asyncio.sleep(300)  # Wait before retry
     
-    async def _create_conditional_orders(self, symbol: str, position_size: float, side: str, entry_price: float, 
+    async def _create_conditional_orders(self, symbol: str, position_size: float, side: str, entry_price: float,
                                         sl_pct: Optional[float], tp_pct: Optional[float]) -> Dict[str, Any]:
         """Create conditional stop loss and take profit orders for a position"""
-        results = {}
-        
+        results = {
+            "sl_order_id": None,
+            "tp_order_id": None,
+            "sl_success": False,
+            "tp_success": False
+        }
+
         try:
+            # Validate SL/TP prices are reasonable
+            current_price = await self.get_current_price(symbol)
+            price_tolerance = 0.001  # 0.1% minimum distance
+
             # Create Stop Loss order
             if sl_pct is not None and sl_pct > 0:
-                try:
-                    sl_price = entry_price * (1 - sl_pct/100) if side.lower() == 'buy' else entry_price * (1 + sl_pct/100)
-                    
-                    # Try STOP_MARKET first (market order when triggered)
-                    sl_order_data = {
-                        "symbol": symbol,
-                        "qty": str(position_size),
-                        "side": 'SELL' if side.upper() == 'BUY' else 'BUY',
-                        "tradeSide": "CLOSE",
-                        "orderType": "STOP_MARKET",
-                        "stopPrice": str(sl_price),
-                        "marginCoin": "USDT",
-                        "reduceOnly": True
-                    }
+                sl_price = entry_price * (1 - sl_pct/100) if side.lower() == 'buy' else entry_price * (1 + sl_pct/100)
 
-                    logging.info(f"Creating stop loss order: {sl_order_data}")
-                    sl_result = await self._post("/trade/place_order", sl_order_data)
-
-                    if sl_result and sl_result.get("orderId"):
-                        results["stop_loss"] = sl_result
-                        logging.info(f"✅ Conditional stop loss created: {sl_result.get('orderId')}")
-
-                except Exception as sl_cond_err:
-                    logging.warning(f"Failed to create conditional stop loss: {sl_cond_err}")
+                # Validate SL price is not too close to entry or current price
+                sl_distance = abs(sl_price - entry_price) / entry_price
+                if sl_distance < price_tolerance:
+                    logging.warning(f"SL price {sl_price:.2f} too close to entry {entry_price:.2f}, skipping SL order")
+                else:
                     try:
-                        # Fallback to STOP with limit price
-                        sl_order_data["orderType"] = "STOP"
-                        sl_order_data["price"] = str(sl_price)
+                        # Try STOP_MARKET first (market order when triggered)
+                        sl_order_data = {
+                            "symbol": symbol,
+                            "qty": str(position_size),
+                            "side": 'SELL' if side.upper() == 'BUY' else 'BUY',
+                            "tradeSide": "CLOSE",
+                            "orderType": "STOP_MARKET",
+                            "stopPrice": str(sl_price),
+                            "marginCoin": "USDT",
+                            "reduceOnly": True
+                        }
+
+                        logging.info(f"Creating stop loss order: {sl_order_data}")
                         sl_result = await self._post("/trade/place_order", sl_order_data)
+
                         if sl_result and sl_result.get("orderId"):
-                            results["stop_loss"] = sl_result
-                            logging.info(f"✅ Fallback stop loss created: {sl_result.get('orderId')}")
-                    except Exception as fallback_err:
-                        logging.error(f"❌ Both stop loss attempts failed: {fallback_err}")
-                
+                            results["sl_order_id"] = sl_result.get("orderId")
+                            results["sl_success"] = True
+                            logging.info(f"✅ Conditional stop loss created: {sl_result.get('orderId')}")
+                        else:
+                            logging.warning(f"SL order creation returned no orderId: {sl_result}")
+
+                    except Exception as sl_cond_err:
+                        logging.warning(f"Failed to create conditional stop loss: {sl_cond_err}")
+                        try:
+                            # Fallback to STOP with limit price
+                            sl_order_data["orderType"] = "STOP"
+                            sl_order_data["price"] = str(sl_price)
+                            sl_result = await self._post("/trade/place_order", sl_order_data)
+                            if sl_result and sl_result.get("orderId"):
+                                results["sl_order_id"] = sl_result.get("orderId")
+                                results["sl_success"] = True
+                                logging.info(f"✅ Fallback stop loss created: {sl_result.get('orderId')}")
+                        except Exception as fallback_err:
+                            logging.error(f"❌ Both stop loss attempts failed: {fallback_err}")
+
             # Create Take Profit order
             if tp_pct is not None and tp_pct > 0:
-                try:
-                    tp_price = entry_price * (1 + tp_pct/100) if side.lower() == 'buy' else entry_price * (1 - tp_pct/100)
+                # Fee-adjusted TP levels: account for taker fee that will be charged on TP execution
+                taker_fee = self.config.get('TAKER_FEE', 0.0006)  # Default 0.06%
+                if side.lower() == 'buy':
+                    # For long positions: TP price needs to be higher to account for exit fees
+                    tp_price = entry_price * (1 + tp_pct/100) / (1 - taker_fee)
+                else:
+                    # For short positions: TP price needs to be lower to account for exit fees
+                    tp_price = entry_price * (1 - tp_pct/100) / (1 + taker_fee)
 
-                    # Try TAKE_PROFIT_MARKET first (market order when triggered)
-                    tp_order_data = {
-                        "symbol": symbol,
-                        "qty": str(position_size),
-                        "side": 'SELL' if side.upper() == 'BUY' else 'BUY',
-                        "tradeSide": "CLOSE",
-                        "orderType": "TAKE_PROFIT_MARKET",
-                        "stopPrice": str(tp_price),
-                        "marginCoin": "USDT",
-                        "reduceOnly": True
-                    }
-
-                    logging.info(f"Creating take profit order: {tp_order_data}")
-                    tp_result = await self._post("/trade/place_order", tp_order_data)
-
-                    if tp_result and tp_result.get("orderId"):
-                        results["take_profit"] = tp_result
-                        logging.info(f"✅ Conditional take profit created: {tp_result.get('orderId')}")
-
-                except Exception as tp_cond_err:
-                    logging.warning(f"Failed to create conditional take profit: {tp_cond_err}")
+                # Validate TP price is not too close to entry
+                tp_distance = abs(tp_price - entry_price) / entry_price
+                if tp_distance < price_tolerance:
+                    logging.warning(f"TP price {tp_price:.2f} too close to entry {entry_price:.2f}, skipping TP order")
+                else:
                     try:
-                        # Fallback to TAKE_PROFIT with limit price
-                        tp_order_data["orderType"] = "TAKE_PROFIT"
-                        tp_order_data["price"] = str(tp_price)
+                        # Try TAKE_PROFIT_MARKET first (market order when triggered)
+                        tp_order_data = {
+                            "symbol": symbol,
+                            "qty": str(position_size),
+                            "side": 'SELL' if side.upper() == 'BUY' else 'BUY',
+                            "tradeSide": "CLOSE",
+                            "orderType": "TAKE_PROFIT_MARKET",
+                            "stopPrice": str(tp_price),
+                            "marginCoin": "USDT",
+                            "reduceOnly": True
+                        }
+
+                        logging.info(f"Creating take profit order: {tp_order_data}")
                         tp_result = await self._post("/trade/place_order", tp_order_data)
+
                         if tp_result and tp_result.get("orderId"):
-                            results["take_profit"] = tp_result
-                            logging.info(f"✅ Fallback take profit created: {tp_result.get('orderId')}")
-                    except Exception as fallback_err:
-                        logging.error(f"❌ Both take profit attempts failed: {fallback_err}")
-                        
+                            results["tp_order_id"] = tp_result.get("orderId")
+                            results["tp_success"] = True
+                            logging.info(f"✅ Conditional take profit created: {tp_result.get('orderId')}")
+                        else:
+                            logging.warning(f"TP order creation returned no orderId: {tp_result}")
+
+                    except Exception as tp_cond_err:
+                        logging.warning(f"Failed to create conditional take profit: {tp_cond_err}")
+                        try:
+                            # Fallback to TAKE_PROFIT with limit price
+                            tp_order_data["orderType"] = "TAKE_PROFIT"
+                            tp_order_data["price"] = str(tp_price)
+                            tp_result = await self._post("/trade/place_order", tp_order_data)
+                            if tp_result and tp_result.get("orderId"):
+                                results["tp_order_id"] = tp_result.get("orderId")
+                                results["tp_success"] = True
+                                logging.info(f"✅ Fallback take profit created: {tp_result.get('orderId')}")
+                        except Exception as fallback_err:
+                            logging.error(f"❌ Both take profit attempts failed: {fallback_err}")
+
         except Exception as e:
             logging.error(f"❌ Error creating conditional orders: {e}")
             import traceback
             logging.error(f"Conditional order error details: {traceback.format_exc()}")
-            
+
         return results
 
     async def get_open_orders(self, symbol: str) -> List[Dict[str, Any]]:
@@ -589,6 +623,183 @@ class BitunixFutures(BaseExchange):
         except Exception as e:
             logging.warning(f"Failed to get order status for {order_id}: {e}")
             return None
+
+    async def check_order_status(self, symbol: str, order_id: str) -> Dict[str, Any]:
+        """Check order status with validation and detailed error handling"""
+        try:
+            order_status = await self.get_order_status(symbol, order_id)
+
+            if not order_status:
+                return {
+                    'valid': False,
+                    'status': 'not_found',
+                    'error': f'Order {order_id} not found',
+                    'order_data': None
+                }
+
+            # Validate order data consistency
+            validation_errors = []
+
+            # Check required fields
+            required_fields = ['orderId', 'status', 'symbol', 'side', 'qty']
+            for field in required_fields:
+                if field not in order_status or order_status[field] is None:
+                    validation_errors.append(f"Missing required field: {field}")
+
+            # Validate quantities
+            qty = order_status.get('qty', 0)
+            filled_qty = order_status.get('filledQty', 0)
+
+            if qty < 0:
+                validation_errors.append("Order quantity cannot be negative")
+            if filled_qty < 0:
+                validation_errors.append("Filled quantity cannot be negative")
+            if filled_qty > qty:
+                validation_errors.append(f"Filled quantity ({filled_qty}) exceeds order quantity ({qty})")
+
+            # Validate prices
+            price = order_status.get('price', 0)
+            avg_price = order_status.get('avgPrice', 0)
+
+            if price < 0:
+                validation_errors.append("Order price cannot be negative")
+            if avg_price < 0:
+                validation_errors.append("Average price cannot be negative")
+
+            # Validate status transitions
+            valid_statuses = ['pending', 'partial_filled', 'filled', 'canceled', 'rejected', 'expired']
+            if order_status.get('status') not in valid_statuses:
+                validation_errors.append(f"Invalid status: {order_status.get('status')}")
+
+            # Check for logical inconsistencies
+            status = order_status.get('status')
+            if status == 'filled' and filled_qty == 0:
+                validation_errors.append("Order marked as filled but filled quantity is zero")
+            elif status == 'filled' and filled_qty < qty:
+                validation_errors.append("Order marked as filled but not fully filled")
+            elif status in ['canceled', 'rejected', 'expired'] and filled_qty > 0:
+                validation_errors.append(f"Order {status} but has filled quantity")
+
+            return {
+                'valid': len(validation_errors) == 0,
+                'status': order_status.get('status'),
+                'validation_errors': validation_errors,
+                'order_data': order_status
+            }
+
+        except Exception as e:
+            logging.error(f"Error checking order status for {order_id}: {e}")
+            return {
+                'valid': False,
+                'status': 'error',
+                'error': str(e),
+                'order_data': None
+            }
+
+    async def validate_position_data(self, symbol: str) -> Dict[str, Any]:
+        """Validate position data consistency and integrity"""
+        try:
+            # Get position data from multiple sources for cross-validation
+            pending_position = await self.get_pending_positions(symbol)
+            all_positions = await self.get_all_positions(symbol)
+
+            validation_result = {
+                'valid': True,
+                'validation_errors': [],
+                'warnings': [],
+                'position_count': len(all_positions),
+                'pending_position': pending_position,
+                'all_positions': all_positions
+            }
+
+            # Validate position count consistency
+            if len(all_positions) > 1:
+                validation_result['warnings'].append(f"Multiple positions found for {symbol}: {len(all_positions)} positions")
+
+            # Validate pending position vs all positions consistency
+            if pending_position and all_positions:
+                pending_in_all = any(pos.positionId == pending_position.positionId for pos in all_positions)
+                if not pending_in_all:
+                    validation_result['validation_errors'].append("Pending position not found in all positions list")
+                    validation_result['valid'] = False
+
+            # Validate each position's data integrity
+            for i, position in enumerate(all_positions):
+                position_errors = []
+                position_warnings = []
+
+                # Check required fields
+                if not hasattr(position, 'positionId') or not position.positionId:
+                    position_errors.append(f"Position {i}: Missing positionId")
+                if not hasattr(position, 'symbol') or position.symbol != symbol:
+                    position_errors.append(f"Position {i}: Symbol mismatch (expected {symbol}, got {position.symbol})")
+                if not hasattr(position, 'side') or position.side not in ['BUY', 'SELL']:
+                    position_errors.append(f"Position {i}: Invalid side '{position.side}'")
+                if not hasattr(position, 'size') or position.size <= 0:
+                    position_errors.append(f"Position {i}: Invalid size {position.size}")
+                if not hasattr(position, 'entry_price') or position.entry_price <= 0:
+                    position_errors.append(f"Position {i}: Invalid entry price {position.entry_price}")
+                if not hasattr(position, 'timestamp') or position.timestamp <= 0:
+                    position_errors.append(f"Position {i}: Invalid timestamp {position.timestamp}")
+
+                # Validate position size is reasonable
+                try:
+                    current_price = await self.get_current_price(symbol)
+                    position_value = position.size * current_price
+                    if position_value < 1:  # Less than $1 position value
+                        position_warnings.append(f"Position {i}: Very small position value (${position_value:.2f})")
+                    elif position_value > 1000000:  # More than $1M position value
+                        position_warnings.append(f"Position {i}: Very large position value (${position_value:.2f})")
+                except Exception as e:
+                    position_warnings.append(f"Position {i}: Could not validate position value: {e}")
+
+                # Validate timestamp is reasonable (not in future, not too old)
+                current_time = int(time.time() * 1000)
+                if position.timestamp > current_time + 60000:  # More than 1 minute in future
+                    position_errors.append(f"Position {i}: Timestamp is in the future")
+                elif position.timestamp < current_time - (365 * 24 * 60 * 60 * 1000):  # More than 1 year old
+                    position_warnings.append(f"Position {i}: Very old timestamp")
+
+                # Validate entry price is reasonable compared to current price
+                try:
+                    current_price = await self.get_current_price(symbol)
+                    price_ratio = position.entry_price / current_price
+                    if price_ratio < 0.1 or price_ratio > 10:  # More than 10x deviation
+                        position_warnings.append(f"Position {i}: Entry price significantly different from current price (ratio: {price_ratio:.2f})")
+                except Exception as e:
+                    position_warnings.append(f"Position {i}: Could not validate entry price: {e}")
+
+                # Add position-specific errors and warnings
+                if position_errors:
+                    validation_result['validation_errors'].extend(position_errors)
+                    validation_result['valid'] = False
+                if position_warnings:
+                    validation_result['warnings'].extend(position_warnings)
+
+            # Cross-validate with account balance if position exists
+            if all_positions:
+                try:
+                    account_balance = await self.get_account_balance('USDT')
+                    total_exposure = sum(pos.size * await self.get_current_price(symbol) for pos in all_positions)
+                    exposure_ratio = total_exposure / account_balance if account_balance > 0 else 0
+
+                    if exposure_ratio > 10:  # More than 10x leverage implied
+                        validation_result['warnings'].append(f"High exposure ratio: {exposure_ratio:.2f}x (balance: ${account_balance:.2f}, exposure: ${total_exposure:.2f})")
+                except Exception as e:
+                    validation_result['warnings'].append(f"Could not validate exposure ratio: {e}")
+
+            return validation_result
+
+        except Exception as e:
+            logging.error(f"Error validating position data for {symbol}: {e}")
+            return {
+                'valid': False,
+                'validation_errors': [f"Validation failed: {str(e)}"],
+                'warnings': [],
+                'position_count': 0,
+                'pending_position': None,
+                'all_positions': []
+            }
 
     async def cancel_order(self, symbol: str, order_id: str) -> bool:
         """Cancel a specific order"""
