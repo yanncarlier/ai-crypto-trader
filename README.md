@@ -1,6 +1,12 @@
 Use at Your Own Risk
 This is experimental/beta software. It may contain bugs or cause unexpected behavior.
-No warranties are provided. Use entirely at your own discretion and risk.
+No warranties are provided. Use entirely at your own discretion and risk.  
+
+Bitunix API Documentation  
+https://openapidoc.bitunix.com/doc/common/introduction.html  
+
+Official OpenAPI SDK  
+https://github.com/BitunixOfficial/open-api  
 
 # AI Crypto Trader
 

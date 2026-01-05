@@ -116,7 +116,7 @@ class BitunixFutures(BaseExchange):
     async def _get_margin_balance(self, margin_coin: str) -> Tuple[float, float]:
         """Fetches available and total balance for a given margin coin."""
         try:
-            data = await self._get("/account", {"marginCoin": margin_coin})
+            data = await self._get("/account/balance", {"marginCoin": margin_coin})
             available = float(data.get("available") or 0.0)
             total = float(data.get("total") or 0.0)
             return available, total
