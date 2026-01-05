@@ -25,6 +25,11 @@ class RiskManager:
         )
         self.trade_history: List[Dict] = []
         self.daily_pnl: Dict[str, float] = {}
+        # Account balance monitoring
+        self.last_balance: Optional[float] = None
+        self.balance_history: List[Dict] = []
+        self.min_balance_threshold: float = config.get('MIN_BALANCE_THRESHOLD', 10.0)  # Minimum balance in USD
+        self.balance_drop_alert_pct: float = config.get('BALANCE_DROP_ALERT_PERCENT', 5.0)  # Alert if balance drops by 5%
 
     async def calculate_position_size(self, symbol: str, price: float, position_size: float) -> Tuple[float, Dict]:
         """Calculate position size based on risk parameters"""
@@ -118,6 +123,12 @@ class RiskManager:
             if decision.get('action') == 'CLOSE_POSITION':
                 return True
 
+            # Monitor account balance
+            balance_ok, balance_reason = await self.monitor_account_balance()
+            if not balance_ok:
+                logging.warning(f"Balance monitoring blocked trade: {balance_reason}")
+                return False
+
             # Check if already in position (only block new positions)
             if current_position and decision.get('action') in ['BUY', 'SELL']:
                 logging.info("Already in position - blocking new trade")
@@ -174,6 +185,54 @@ class RiskManager:
         self.daily_pnl[today] = self.daily_pnl.get(today, 0) + pnl
         logging.info(
             f"Updated daily PnL: {pnl}, total for today: {self.daily_pnl[today]}")
+
+    async def monitor_account_balance(self) -> Tuple[bool, str]:
+        """Monitor account balance for significant changes and minimum thresholds.
+
+        Returns:
+            Tuple[bool, str]: (should_continue_trading, reason)
+        """
+        try:
+            current_balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
+
+            # Record balance history
+            balance_record = {
+                'timestamp': int(time.time() * 1000),
+                'balance': current_balance
+            }
+            self.balance_history.append(balance_record)
+
+            # Keep only last 100 balance records to prevent memory issues
+            if len(self.balance_history) > 100:
+                self.balance_history = self.balance_history[-100:]
+
+            # Initialize last_balance on first check
+            if self.last_balance is None:
+                self.last_balance = current_balance
+                logging.info(f"Initial balance recorded: ${current_balance:,.2f}")
+                return True, "Initial balance check"
+
+            # Check for significant balance drop
+            balance_change_pct = ((self.last_balance - current_balance) / self.last_balance) * 100
+            if balance_change_pct >= self.balance_drop_alert_pct:
+                logging.warning(f"Significant balance drop detected: {balance_change_pct:.2f}% (${self.last_balance - current_balance:.2f})")
+                logging.warning(f"Previous balance: ${self.last_balance:,.2f}, Current balance: ${current_balance:,.2f}")
+
+            # Check minimum balance threshold
+            if current_balance < self.min_balance_threshold:
+                logging.error(f"Account balance ${current_balance:,.2f} below minimum threshold ${self.min_balance_threshold:,.2f}")
+                logging.error("Trading paused due to insufficient balance")
+                return False, f"Balance below minimum threshold (${current_balance:.2f} < {self.min_balance_threshold:.2f})"
+
+            # Update last balance for next comparison
+            self.last_balance = current_balance
+
+            return True, f"Balance OK: ${current_balance:,.2f}"
+
+        except Exception as e:
+            logging.error(f"Error monitoring account balance: {e}")
+            # Don't block trading on monitoring errors, but log the issue
+            return True, f"Balance monitoring error: {str(e)}"
 
     def get_risk_metrics(self) -> Dict:
         """Calculate risk metrics"""

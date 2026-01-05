@@ -32,7 +32,7 @@ This document tracks the status of key functionalities in the trading bot to pre
 - [x] Confidence threshold checking
 - [ ] Max position hold time enforcement
 - [ ] Daily PnL tracking
-- [ ] Account balance monitoring
+- [x] Account balance monitoring
 
 ### State Synchronization
 - [x] Exchange position sync on cycle start
