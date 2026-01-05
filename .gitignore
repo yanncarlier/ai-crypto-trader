@@ -168,3 +168,4 @@ coverage.xml
 # End of filelogs/
 ai_responses/
 ai_responses/*
+test_api.sh
