@@ -83,7 +83,8 @@ class BitunixFutures(BaseExchange):
             if data is None:
                 raise Exception("Invalid JSON response from private GET API")
             if data.get("code") != 0:
-                logging.warning(f"Private GET API Error - Endpoint: {endpoint}, Params: {params}, Response: {data}")
+                app_logger = logging.getLogger("app")
+                app_logger.warning(f"Private GET API Error - Endpoint: {endpoint}, Params: {params}, Response: {data}")
                 raise Exception(f"API Error {data.get('code')}: {data.get('msg')}")
             return data["data"]
 
@@ -115,50 +116,54 @@ class BitunixFutures(BaseExchange):
 
     async def _get_margin_balance(self, margin_coin: str) -> Tuple[float, float]:
         """Fetches available and total balance for a given margin coin."""
+        app_logger = logging.getLogger("app")
         try:
-            data = await self._get("/account/balance", {"marginCoin": margin_coin})
-            available = float(data.get("available") or 0.0)
-            total = float(data.get("total") or 0.0)
-            return available, total
+            data = await self._get("/balance", {})
+            app_logger.info(f"Account data for {margin_coin}: {data}")
+            # Assume data is a list of balances
+            if isinstance(data, list):
+                for item in data:
+                    if item.get("asset") == margin_coin or item.get("coin") == margin_coin:
+                        available = float(item.get("available") or item.get("free") or 0.0)
+                        total = float(item.get("total") or item.get("balance") or 0.0)
+                        return available, total
+            # If dict, check for the coin
+            elif isinstance(data, dict):
+                if margin_coin in data:
+                    coin_data = data[margin_coin]
+                    if isinstance(coin_data, dict):
+                        available = float(coin_data.get("available") or coin_data.get("free") or 0.0)
+                        total = float(coin_data.get("total") or coin_data.get("balance") or 0.0)
+                        return available, total
+                # Check for walletBalance in root
+                balance = float(data.get("walletBalance") or 0.0)
+                total = float(data.get("walletBalance") or 0.0)
+                return balance, total
+            return 0.0, 0.0
         except RetryError as e:
-            logging.warning(
+            app_logger.warning(
                 f"Failed to fetch {margin_coin} balance after multiple retries: {e}")
         except Exception as e:
             # This will catch other exceptions, including API errors
-            logging.warning(f"Could not fetch {margin_coin} balance: {e}")
+            app_logger.warning(f"Could not fetch {margin_coin} balance: {e}")
         return 0.0, 0.0
 
     async def get_account_balance(self, currency: str) -> float:
         """Get total account balance in USDT (including other assets converted to USDT)"""
-        # Fetch USDT balance
-        usdt_balance, total_usdt = await self._get_margin_balance("USDT")
-        # Fetch BTC balance
-        btc_balance, total_btc = await self._get_margin_balance("BTC")
-
-        # Safely get current BTC price
+        app_logger = logging.getLogger("app")
         try:
-            btc_price = await self.get_current_price("BTCUSDT")
+            # Fetch balance from history positions realized PNL
+            data = await self._get("/position/get_history_positions", {"symbol": "BTCUSDT"})
+            if data and "positionList" in data:
+                total_pnl = sum(float(pos.get("realizedPNL", 0)) for pos in data["positionList"])
+                app_logger.info(f"Total balance from realized PNL: ${total_pnl:,.2f}")
+                return total_pnl
+            else:
+                app_logger.warning("No position data found for balance calculation")
+                return 0.0
         except Exception as e:
-            logging.error(f"❌ Failed to fetch BTC price: {e}")
-            logging.warning(
-                f"💰 Balance: ${usdt_balance:,.2f} USDT (BTC not included)")
-            return usdt_balance
-
-        # Calculate total values
-        btc_in_usdt = btc_balance * btc_price
-        total_btc_in_usdt = total_btc * btc_price
-        total_available = usdt_balance + btc_in_usdt
-        total_equity = total_usdt + total_btc_in_usdt
-
-        # Log concise balance summary
-        if btc_balance > 0:
-            logging.info(
-                f"💰 Balance: ${total_available:,.2f} (${usdt_balance:,.2f} USDT + {btc_balance:.6f} BTC)")
-        else:
-            logging.info(f"💰 Balance: ${total_available:,.2f} USDT")
-
-        # Return total available balance in USDT
-        return total_available
+            app_logger.warning(f"Could not fetch balance from history: {e}")
+            return 0.0
 
     async def get_pending_positions(self, symbol: str) -> Optional[Position]:
         try:
