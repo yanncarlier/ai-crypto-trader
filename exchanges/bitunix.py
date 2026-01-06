@@ -71,6 +71,11 @@ class BitunixFutures(BaseExchange):
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     async def _get(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Any:
+        # Skip actual API calls in forward testing mode
+        if self.config and self.config.get('FORWARD_TESTING'):
+            logging.getLogger("app").info(f"Forward testing: skipping private GET {endpoint}")
+            return None
+        
         url = f"{API_URL}{endpoint}"
         sorted_params = "".join(f"{k}{v}" for k, v in sorted(
             (params or {}).items())) if params else ""
@@ -119,6 +124,15 @@ class BitunixFutures(BaseExchange):
 
     async def _get_margin_balance(self, margin_coin: str) -> Tuple[float, float]:
         """Fetches available and total balance for a given margin coin."""
+        forward_testing = self.config.get('FORWARD_TESTING', False)
+        if isinstance(forward_testing, str):
+            forward_testing = forward_testing.lower() == 'true'
+        if forward_testing:
+            # Return dummy balance for forward testing
+            dummy_balance = 10000.0
+            logging.getLogger("app").info(f"Forward testing: dummy balance for {margin_coin}: ${dummy_balance:,.2f}")
+            return dummy_balance, dummy_balance
+        
         app_logger = logging.getLogger("app")
         try:
             data = await self._get("/api/v1/futures/account", {})
@@ -168,6 +182,11 @@ class BitunixFutures(BaseExchange):
 
     async def get_account_balance(self, currency: str) -> float:
         """Get total account balance"""
+        if self.config.get('FORWARD_TESTING', False):
+            # Return a dummy balance for forward testing
+            dummy_balance = 10000.0
+            logging.getLogger("app").info(f"Forward testing: using dummy balance ${dummy_balance:,.2f} {currency}")
+            return dummy_balance
         try:
             _, total = await self._get_margin_balance(currency)
             logging.getLogger("app").info(f"Account balance: ${total:,.2f} {currency}")
