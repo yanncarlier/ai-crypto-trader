@@ -2,6 +2,8 @@
 
 This document tracks the status of key functionalities in the trading bot to prevent regressions and ensure consistent behavior.
 
+
+
 ## Core Trading Logic
 
 ### Position Management
@@ -91,19 +93,6 @@ This document tracks the status of key functionalities in the trading bot to pre
 - [x] Response parsing
 - [x] Confidence handling
 - [ ] AI decision validation
-
-## Known Issues (To Be Fixed)
-
-1. ~~Conditional orders not verified after placement~~ (Fixed: Added verification and logging)
-2. ~~No monitoring of SL/TP order status~~ (Fixed: Added monitoring in monitor_positions)
-3. ~~State sync issues when SL/TP triggers~~ (Fixed: Added detection and state update)
-4. ~~SL/TP orders not cancelled on manual close~~ (Fixed: Added cancellation in _close_position)
-5. ~~Incomplete position reversal handling~~ (Fixed: Now uses _close_position for consistency)
-6. ~~No SL/TP price validation~~ (Fixed: Added minimum distance validation)
-7. Forward testing doesn't simulate SL/TP
-8. No handling of partial fills
-9. ~~Fee impact not considered in TP/SL levels~~ (Fixed: Fee-adjusted TP levels implemented)
-10. ~~Max hold time not enforced~~ (Fixed: Added enforcement in monitor_positions)
 
 ## Testing Checklist
 

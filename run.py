@@ -166,6 +166,13 @@ async def main():
                         pnl_sign = '+' if pnl > 0 else ''
                         print(
                             f"   • Unrealized PnL: {pnl_sign}${abs(pnl):,.2f} ({pnl_sign}{abs(pnl_pct):.2f}%)")
+
+                # Check for existing positions and close them on startup
+                position = await exchange.get_pending_positions(config['SYMBOL'])
+                if position:
+                    print(f"Found existing position: {position.side} {position.size} @ ${position.entry_price:,.0f}")
+                    await exchange.close_position(position, "Startup cleanup")
+                    print("Closed existing position on startup")
             except Exception as e:
                 print(f"Could not fetch balance: {e}")
                 raise

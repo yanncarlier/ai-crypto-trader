@@ -1,0 +1,5 @@
+Always choose the simplest solution possible. 
+Never use CCXT or any third-party exchange wrappers. 
+Interact directly with official exchange APIs, (e.g., via official SDKs or REST/Websocket endpoints) to ensure full control and compliance. 
+Always fetch real-time data from the exchange, even in paper mode.
+No hardcoded values, all variables (API keys, pairs, thresholds, etc.) must be in .env. Load with dotenv.

@@ -12,7 +12,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 from exchanges.base import BaseExchange, Position
 from utils.risk_manager import RiskManager
 
-API_URL = "https://fapi.bitunix.com/api/v1/futures"
+API_URL = "https://fapi.bitunix.com"
 TIMEOUT = 10
 
 
@@ -83,8 +83,11 @@ class BitunixFutures(BaseExchange):
             if data is None:
                 raise Exception("Invalid JSON response from private GET API")
             if data.get("code") != 0:
-                app_logger = logging.getLogger("app")
-                app_logger.warning(f"Private GET API Error - Endpoint: {endpoint}, Params: {params}, Response: {data}")
+                if data.get("code") != 2:
+                    app_logger = logging.getLogger("app")
+                    app_logger.warning(f"Private GET API Error - Endpoint: {endpoint}, Params: {params}, Response: {data}")
+                if data.get("code") == 2:
+                    return None  # Treat "System error" as no data (no positions)
                 raise Exception(f"API Error {data.get('code')}: {data.get('msg')}")
             return data["data"]
 
@@ -107,7 +110,7 @@ class BitunixFutures(BaseExchange):
             return result["data"]
 
     async def get_current_price(self, symbol: str) -> float:
-        data = await self._public_get("/market/tickers", {"symbols": symbol})
+        data = await self._public_get("/api/v1/futures/market/tickers", {"symbols": symbol})
         for t in data:
             if t["symbol"] == symbol:
                 price = float(t["lastPrice"])
@@ -118,27 +121,42 @@ class BitunixFutures(BaseExchange):
         """Fetches available and total balance for a given margin coin."""
         app_logger = logging.getLogger("app")
         try:
-            data = await self._get("/balance", {})
+            data = await self._get("/api/v1/futures/account", {})
             app_logger.info(f"Account data for {margin_coin}: {data}")
-            # Assume data is a list of balances
+
+            # Handle different response formats
             if isinstance(data, list):
                 for item in data:
-                    if item.get("asset") == margin_coin or item.get("coin") == margin_coin:
-                        available = float(item.get("available") or item.get("free") or 0.0)
-                        total = float(item.get("total") or item.get("balance") or 0.0)
+                    if item.get("asset") == margin_coin or item.get("coin") == margin_coin or item.get("currency") == margin_coin:
+                        available = float(item.get("available") or item.get("free") or item.get("availableBalance") or 0.0)
+                        total = float(item.get("total") or item.get("balance") or item.get("totalBalance") or 0.0)
                         return available, total
-            # If dict, check for the coin
             elif isinstance(data, dict):
+                # Check if coin is a key
                 if margin_coin in data:
                     coin_data = data[margin_coin]
                     if isinstance(coin_data, dict):
-                        available = float(coin_data.get("available") or coin_data.get("free") or 0.0)
-                        total = float(coin_data.get("total") or coin_data.get("balance") or 0.0)
+                        available = float(coin_data.get("available") or coin_data.get("free") or coin_data.get("availableBalance") or 0.0)
+                        total = float(coin_data.get("total") or coin_data.get("balance") or coin_data.get("totalBalance") or 0.0)
                         return available, total
-                # Check for walletBalance in root
-                balance = float(data.get("walletBalance") or 0.0)
-                total = float(data.get("walletBalance") or 0.0)
-                return balance, total
+                    elif isinstance(coin_data, (int, float, str)):
+                        # If it's a direct value
+                        total = float(coin_data)
+                        return total, total
+
+                # Check for direct balance fields in root
+                available = float(data.get("availableBalance") or data.get("available") or data.get("free") or 0.0)
+                total = float(data.get("totalBalance") or data.get("balance") or data.get("walletBalance") or data.get("equity") or 0.0)
+
+                # If we found any balance, return it
+                if total > 0 or available > 0:
+                    return available, total
+
+                # Last resort: check if the entire dict represents balance
+                for key, value in data.items():
+                    if isinstance(value, (int, float)) and value > 0:
+                        return float(value), float(value)
+
             return 0.0, 0.0
         except RetryError as e:
             app_logger.warning(
@@ -149,34 +167,27 @@ class BitunixFutures(BaseExchange):
         return 0.0, 0.0
 
     async def get_account_balance(self, currency: str) -> float:
-        """Get total account balance in USDT (including other assets converted to USDT)"""
-        app_logger = logging.getLogger("app")
+        """Get total account balance"""
         try:
-            # Fetch balance from history positions realized PNL
-            data = await self._get("/position/get_history_positions", {"symbol": "BTCUSDT"})
-            if data and "positionList" in data:
-                total_pnl = sum(float(pos.get("realizedPNL", 0)) for pos in data["positionList"])
-                app_logger.info(f"Total balance from realized PNL: ${total_pnl:,.2f}")
-                return total_pnl
-            else:
-                app_logger.warning("No position data found for balance calculation")
-                return 0.0
+            _, total = await self._get_margin_balance(currency)
+            logging.getLogger("app").info(f"Account balance: ${total:,.2f} {currency}")
+            return total
         except Exception as e:
-            app_logger.warning(f"Could not fetch balance from history: {e}")
+            logging.getLogger("app").warning(f"Could not fetch balance: {e}")
             return 0.0
 
     async def get_pending_positions(self, symbol: str) -> Optional[Position]:
         try:
             # Try different endpoints for positions
             endpoints = [
-                "/position/list",
-                "/position/get_positions",
-                "/position/get_pending_positions"
+                "/api/v1/futures/position/list",
+                "/api/v1/futures/position/get_positions",
+                "/api/v1/futures/position/get_pending_positions"
             ]
 
             for endpoint in endpoints:
                 try:
-                    data = await self._get(endpoint, {"symbol": symbol, "marginCoin": "USDT"})
+                    data = await self._get(endpoint, {"symbol": symbol})
                     # Debug: Log the raw API response
                     logging.info(f"Position API response for {symbol} from {endpoint}: {data}")
 
@@ -214,14 +225,16 @@ class BitunixFutures(BaseExchange):
         try:
             # Try different endpoints for positions
             endpoints = [
-                "/position/list",
-                "/position/get_positions",
-                "/position/get_pending_positions"
+                "/api/v1/futures/position/list",
+                "/api/v1/futures/position/get_positions",
+                "/api/v1/futures/position/get_pending_positions"
             ]
 
             for endpoint in endpoints:
                 try:
-                    data = await self._get(endpoint, {"symbol": symbol, "marginCoin": "USDT"})
+                    data = await self._get(endpoint, {"symbol": symbol})
+                    if data is None:
+                        continue
                     positions = []
                     for pos in data:
                         if float(pos.get("qty", 0)) != 0:
@@ -281,12 +294,12 @@ class BitunixFutures(BaseExchange):
         return summary
 
     async def set_leverage(self, symbol: str, leverage: int):
-        await self._post("/account/change_leverage",
+        await self._post("/api/v1/futures/account/change_leverage",
                    {"symbol": symbol, "leverage": leverage, "marginCoin": "USDT"})
 
     async def set_margin_mode(self, symbol: str, mode: str):
         mode_str = "ISOLATION" if mode.upper() == "ISOLATED" else "CROSS"
-        await self._post("/account/change_margin_mode",
+        await self._post("/api/v1/futures/account/change_margin_mode",
                    {"symbol": symbol, "marginMode": mode_str, "marginCoin": "USDT"})
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
@@ -337,7 +350,7 @@ class BitunixFutures(BaseExchange):
             }
 
             logging.info(f"Placing order: {order_data}")
-            order = await self._post("/trade/place_order", order_data)
+            order = await self._post("/api/v1/futures/trade/place_order", order_data)
 
             # Log the trade
             trade = {
@@ -397,7 +410,7 @@ class BitunixFutures(BaseExchange):
                 return {'order': mock_order, 'pnl': pnl}
 
             # Place the order
-            order = await self._post("/trade/place_order", {
+            order = await self._post("/api/v1/futures/trade/place_order", {
                 "symbol": position.symbol,
                 "qty": str(position.size),
                 "side": side,
@@ -496,7 +509,7 @@ class BitunixFutures(BaseExchange):
                         }
 
                         logging.info(f"Creating stop loss order: {sl_order_data}")
-                        sl_result = await self._post("/trade/place_order", sl_order_data)
+                        sl_result = await self._post("/api/v1/futures/trade/place_order", sl_order_data)
 
                         if sl_result and sl_result.get("orderId"):
                             results["sl_order_id"] = sl_result.get("orderId")
@@ -511,7 +524,7 @@ class BitunixFutures(BaseExchange):
                             # Fallback to STOP with limit price
                             sl_order_data["orderType"] = "STOP"
                             sl_order_data["price"] = str(sl_price)
-                            sl_result = await self._post("/trade/place_order", sl_order_data)
+                            sl_result = await self._post("/api/v1/futures/trade/place_order", sl_order_data)
                             if sl_result and sl_result.get("orderId"):
                                 results["sl_order_id"] = sl_result.get("orderId")
                                 results["sl_success"] = True
@@ -549,7 +562,7 @@ class BitunixFutures(BaseExchange):
                         }
 
                         logging.info(f"Creating take profit order: {tp_order_data}")
-                        tp_result = await self._post("/trade/place_order", tp_order_data)
+                        tp_result = await self._post("/api/v1/futures/trade/place_order", tp_order_data)
 
                         if tp_result and tp_result.get("orderId"):
                             results["tp_order_id"] = tp_result.get("orderId")
@@ -564,7 +577,7 @@ class BitunixFutures(BaseExchange):
                             # Fallback to TAKE_PROFIT with limit price
                             tp_order_data["orderType"] = "TAKE_PROFIT"
                             tp_order_data["price"] = str(tp_price)
-                            tp_result = await self._post("/trade/place_order", tp_order_data)
+                            tp_result = await self._post("/api/v1/futures/trade/place_order", tp_order_data)
                             if tp_result and tp_result.get("orderId"):
                                 results["tp_order_id"] = tp_result.get("orderId")
                                 results["tp_success"] = True
@@ -582,7 +595,7 @@ class BitunixFutures(BaseExchange):
     async def get_open_orders(self, symbol: str) -> List[Dict[str, Any]]:
         """Get all open orders for a symbol"""
         try:
-            data = await self._get("/trade/get_open_orders", {"symbol": symbol})
+            data = await self._get("/api/v1/futures/trade/get_open_orders", {"symbol": symbol})
             return data if data else []
         except Exception as e:
             logging.warning(f"Failed to fetch open orders for {symbol}: {e}")
@@ -591,7 +604,7 @@ class BitunixFutures(BaseExchange):
     async def get_order_status(self, symbol: str, order_id: str) -> Optional[Dict[str, Any]]:
         """Get the status of a specific order"""
         try:
-            data = await self._get("/trade/get_order_details", {
+            data = await self._get("/api/v1/futures/trade/get_order_details", {
                 "symbol": symbol,
                 "orderId": order_id,
                 "marginCoin": "USDT"
@@ -809,7 +822,7 @@ class BitunixFutures(BaseExchange):
     async def cancel_order(self, symbol: str, order_id: str) -> bool:
         """Cancel a specific order"""
         try:
-            result = await self._post("/trade/cancel_order", {
+            result = await self._post("/api/v1/futures/trade/cancel_order", {
                 "symbol": symbol,
                 "orderId": order_id,
                 "marginCoin": "USDT"
@@ -860,7 +873,7 @@ class BitunixFutures(BaseExchange):
 
     async def fetch_ohlcv(self, symbol: str, timeframe: str = "1m", limit: int = 15) -> list:
         data = await self._public_get(
-            "/market/kline", {"symbol": symbol, "interval": timeframe, "limit": limit})
+            "/api/v1/futures/market/kline", {"symbol": symbol, "interval": timeframe, "limit": limit})
         if data is None:
             return []
         ohlcv = []
@@ -910,7 +923,7 @@ class BitunixFutures(BaseExchange):
             "slPrice": str(sl_price),
             "tpPrice": str(tp_price)
         }
-        return await self._post("/trade/place_position_tp_sl_order", data)
+        return await self._post("/api/v1/futures/trade/place_position_tp_sl_order", data)
 
     async def place_order(self, symbol: str, side: str, type: str, quantity: float, leverage: Optional[int] = None) -> Dict[str, Any]:
         # Check if in forward testing mode (real data, no execution)
@@ -930,5 +943,5 @@ class BitunixFutures(BaseExchange):
             "orderType": type,
             "marginCoin": "USDT",
         }
-        order = await self._post("/trade/place_order", order_data)
+        order = await self._post("/api/v1/futures/trade/place_order", order_data)
         return {"status": "filled", "orderId": order.get("orderId", "unknown") if order else "failed", "pnl": 0.0}
