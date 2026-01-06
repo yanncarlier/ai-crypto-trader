@@ -51,11 +51,15 @@ class TradingBot:
                 else:
                     timestamp = datetime.now()
 
+                # Use consistent position object structure
                 self.current_position = {
                     'side': position.side,
                     'quantity': position.size,
                     'entry_price': position.entry_price,
-                    'timestamp': timestamp
+                    'timestamp': timestamp,
+                    'sl_order_id': getattr(position, 'sl_order_id', None),
+                    'tp_order_id': getattr(position, 'tp_order_id', None),
+                    'position_id': position.positionId
                 }
                 self.last_trade_time = timestamp
                 self.app_logger.info(f"Detected existing position: {position.side} {position.size} @ ${position.entry_price:,.0f}")
@@ -255,7 +259,8 @@ class TradingBot:
                         'tp_order_id': getattr(existing_position, 'tp_order_id', None)
                     }
                     await self._close_position(position_dict['side'], await self.exchange.get_current_price(symbol), "Position reversal")
-                    # _close_position updates self.current_position to None on success
+                    # After closing, continue to place the new order - don't return
+                    self.logger.info(f"Position closed. Now placing new {side} order.")
                 else:
                     # Same direction - this shouldn't happen with proper AI logic, but handle gracefully
                     self.logger.warning(f"AI requested {side} but already in {existing_position.side} position - blocking duplicate position")

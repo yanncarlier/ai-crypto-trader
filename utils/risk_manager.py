@@ -117,7 +117,7 @@ class RiskManager:
         return True, "OK"
 
     async def can_trade(self, decision: Dict, current_price: float, current_position: Optional[Dict]) -> bool:
-        """Check if a trade can be executed based on risk rules."""
+        """Check if a trade can be executed based on risk rules with enhanced validation."""
         try:
             # Allow closing positions even if already in one
             if decision.get('action') == 'CLOSE_POSITION':
@@ -134,45 +134,74 @@ class RiskManager:
                 logging.info("Already in position - blocking new trade")
                 return False
 
-            # Check overall risk limits
+            # Check overall risk limits with enhanced validation
             can_proceed, reason = await self.check_risk_limits(decision.get('symbol', self.config['SYMBOL']))
             if not can_proceed:
                 logging.warning(f"Risk limit violated: {reason}")
                 return False
 
-            # Check confidence threshold
+            # Check confidence threshold with minimum bounds
             confidence = decision.get('confidence', 0)
             min_confidence = self.config.get('MIN_CONFIDENCE', 0.7)
             if confidence < min_confidence:
                 logging.info(f"AI confidence {confidence:.2f} below threshold {min_confidence:.2f}")
                 return False
 
-            # Check risk-reward ratio
+            # Check risk-reward ratio calculation
             sl_pct = self.config.get('STOP_LOSS_PERCENT', 2.0)
             tp_pct = self.config.get('TAKE_PROFIT_PERCENT', 4.0)
+            
+            # Validate SL/TP percentages are reasonable
+            if sl_pct <= 0 or tp_pct <= 0:
+                logging.warning("SL or TP percentage is zero or negative")
+                return False
+                
             rr_ratio = tp_pct / sl_pct
             min_rr = self.config.get('MIN_RISK_REWARD_RATIO', 2.0)
             if rr_ratio < min_rr:
                 logging.info(f"Risk-reward ratio {rr_ratio:.2f} below minimum {min_rr:.2f}")
                 return False
 
-            # Check position size feasibility
+            # Check position size feasibility with comprehensive limits
             balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
             leverage = self.config.get('LEVERAGE', 1)
             max_risk_pct = self.config.get('MAX_RISK_PERCENT', 1.0)
 
-            # Calculate maximum position value with risk limits
+            # Validate balance is sufficient
+            if balance <= 0:
+                logging.error("Account balance is zero or negative")
+                return False
+
+            # Calculate maximum position value with risk limits and fee buffer
             max_position_value = balance * (max_risk_pct / 100.0) * leverage
-            proposed_size = max_position_value / current_price
+            
+            # Account for trading fees in position sizing
+            taker_fee = self.config.get('TAKER_FEE', 0.0006)
+            fee_buffer = taker_fee * 2  # Conservative: assume entry + exit fees
+            effective_max_position_value = max_position_value * (1 - fee_buffer)
+            
+            proposed_size = effective_max_position_value / current_price
 
             if proposed_size <= 0:
                 logging.warning("Calculated position size is zero or negative")
                 return False
 
-            # Additional check: ensure position size doesn't exceed exchange limits
-            if proposed_size * current_price > balance * leverage:
-                logging.warning("Position size exceeds leverage limits")
+            # Additional check: ensure position size doesn't exceed leverage limits including fees
+            total_position_value = proposed_size * current_price
+            if total_position_value > balance * leverage * (1 - fee_buffer):
+                logging.warning("Position size exceeds adjusted leverage limits")
                 return False
+
+            # Validate against exchange minimum requirements (if available)
+            min_position_value = 1.0  # $1 minimum position value
+            if total_position_value < min_position_value:
+                logging.info(f"Position value ${total_position_value:.2f} below minimum ${min_position_value:.2f}")
+                return False
+
+            # Enhanced logging for position sizing
+            self.logger.info(f"Position validation: Balance=${balance:.2f}, MaxRisk={max_risk_pct:.1f}%, "
+                           f"Leverage={leverage}x, MaxValue=${max_position_value:.2f}, "
+                           f"EffectiveValue=${effective_max_position_value:.2f}, Size={proposed_size:.4f}")
 
             return True
         except Exception as e:

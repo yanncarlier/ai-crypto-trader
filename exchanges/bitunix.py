@@ -495,18 +495,44 @@ class BitunixFutures(BaseExchange):
         }
 
         try:
+            # Check if in forward testing mode
+            if self.config.get('FORWARD_TESTING', False):
+                logging.info(f"📊 FORWARD TESTING: Creating SL/TP orders (simulated)")
+                mock_sl_id = f"forward_test_sl_{int(time.time())}"
+                mock_tp_id = f"forward_test_tp_{int(time.time())}"
+                
+                # Simulate SL/TP creation
+                if sl_pct and sl_pct > 0:
+                    results["sl_order_id"] = mock_sl_id
+                    results["sl_success"] = True
+                    logging.info(f"📊 FORWARD TESTING: Simulated SL order created (ID: {mock_sl_id})")
+                
+                if tp_pct and tp_pct > 0:
+                    results["tp_order_id"] = mock_tp_id
+                    results["tp_success"] = True
+                    logging.info(f"📊 FORWARD TESTING: Simulated TP order created (ID: {mock_tp_id})")
+                
+                return results
+
             # Validate SL/TP prices are reasonable
             current_price = await self.get_current_price(symbol)
-            price_tolerance = 0.001  # 0.1% minimum distance
+            
+            # Improved minimum distance calculation based on Bitunix requirements
+            # Bitunix typically requires minimum 0.1% distance from current price
+            min_distance_pct = 0.001  # 0.1% minimum distance
+            exchange_min_distance_pct = 0.002  # 0.2% conservative minimum for exchange requirements
 
             # Create Stop Loss order
             if sl_pct is not None and sl_pct > 0:
                 sl_price = entry_price * (1 - sl_pct/100) if side.lower() == 'buy' else entry_price * (1 + sl_pct/100)
 
-                # Validate SL price is not too close to entry or current price
-                sl_distance = abs(sl_price - entry_price) / entry_price
-                if sl_distance < price_tolerance:
-                    logging.warning(f"SL price {sl_price:.2f} too close to entry {entry_price:.2f}, skipping SL order")
+                # Validate SL price with improved distance checking
+                sl_distance_from_entry = abs(sl_price - entry_price) / entry_price
+                sl_distance_from_current = abs(sl_price - current_price) / current_price
+                
+                if (sl_distance_from_entry < min_distance_pct or sl_distance_from_current < exchange_min_distance_pct):
+                    logging.warning(f"SL price {sl_price:.2f} too close. Entry: {entry_price:.2f}, Current: {current_price:.2f}. Skipping SL order.")
+                    logging.warning(f"Distance from entry: {sl_distance_from_entry:.3%}, from current: {sl_distance_from_current:.3%}")
                 else:
                     try:
                         # Try STOP_MARKET first (market order when triggered)
@@ -556,10 +582,13 @@ class BitunixFutures(BaseExchange):
                     # For short positions: TP price needs to be lower to account for exit fees
                     tp_price = entry_price * (1 - tp_pct/100) / (1 + taker_fee)
 
-                # Validate TP price is not too close to entry
-                tp_distance = abs(tp_price - entry_price) / entry_price
-                if tp_distance < price_tolerance:
-                    logging.warning(f"TP price {tp_price:.2f} too close to entry {entry_price:.2f}, skipping TP order")
+                # Validate TP price with improved distance checking
+                tp_distance_from_entry = abs(tp_price - entry_price) / entry_price
+                tp_distance_from_current = abs(tp_price - current_price) / current_price
+                
+                if (tp_distance_from_entry < min_distance_pct or tp_distance_from_current < exchange_min_distance_pct):
+                    logging.warning(f"TP price {tp_price:.2f} too close. Entry: {entry_price:.2f}, Current: {current_price:.2f}. Skipping TP order.")
+                    logging.warning(f"Distance from entry: {tp_distance_from_entry:.3%}, from current: {tp_distance_from_current:.3%}")
                 else:
                     try:
                         # Try TAKE_PROFIT_MARKET first (market order when triggered)

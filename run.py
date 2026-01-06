@@ -48,8 +48,94 @@ def get_env_str(name: str, default: str) -> str:
 
 
 
+def validate_config(config: Dict[str, Any]) -> bool:
+    """Comprehensive validation of configuration parameters"""
+    validation_errors = []
+    
+    try:
+        # Trading Configuration Validation
+        if not config.get('SYMBOL') or len(config['SYMBOL']) < 4:
+            validation_errors.append("SYMBOL must be at least 4 characters")
+        
+        if config['LEVERAGE'] < 1 or config['LEVERAGE'] > 125:
+            validation_errors.append("LEVERAGE must be between 1 and 125")
+            
+        if config['MARGIN_MODE'].upper() not in ['ISOLATED', 'CROSS']:
+            validation_errors.append("MARGIN_MODE must be ISOLATED or CROSS")
+            
+        if config['CYCLE_MINUTES'] < 0.1 or config['CYCLE_MINUTES'] > 1440:  # 0.1 min to 24 hours
+            validation_errors.append("CYCLE_MINUTES must be between 0.1 and 1440")
+            
+        # Risk Management Validation
+        sl_percent = config.get('STOP_LOSS_PERCENT', 0)
+        tp_percent = config.get('TAKE_PROFIT_PERCENT', 0)
+        
+        if sl_percent <= 0 or sl_percent > 50:  # Max 50% stop loss
+            validation_errors.append("STOP_LOSS_PERCENT must be > 0 and ≤ 50%")
+            
+        if tp_percent <= 0 or tp_percent > 100:  # Max 100% take profit
+            validation_errors.append("TAKE_PROFIT_PERCENT must be > 0 and ≤ 100%")
+            
+        if tp_percent < sl_percent * 1.5:  # Minimum 1.5:1 risk-reward
+            validation_errors.append("TAKE_PROFIT_PERCENT should be at least 1.5x STOP_LOSS_PERCENT")
+            
+        # Financial Limits
+        max_risk_percent = config.get('MAX_RISK_PERCENT', 0)
+        if max_risk_percent <= 0 or max_risk_percent > 10:  # Max 10% risk per trade
+            validation_errors.append("MAX_RISK_PERCENT must be > 0 and ≤ 10%")
+            
+        min_confidence = config.get('MIN_CONFIDENCE', 0)
+        if min_confidence < 0.1 or min_confidence > 1.0:
+            validation_errors.append("MIN_CONFIDENCE must be between 0.1 and 1.0")
+            
+        # Exchange Configuration
+        if not config.get('FORWARD_TESTING', False):  # Only validate API keys for live trading
+            if not config.get('EXCHANGE_API_KEY') or len(config['EXCHANGE_API_KEY']) < 10:
+                validation_errors.append("EXCHANGE_API_KEY required for live trading")
+                
+            if not config.get('EXCHANGE_API_SECRET') or len(config['EXCHANGE_API_SECRET']) < 10:
+                validation_errors.append("EXCHANGE_API_SECRET required for live trading")
+        
+        # AI Configuration
+        llm_provider = config.get('LLM_PROVIDER', '').lower()
+        valid_providers = ['deepseek', 'xai', 'groq', 'openai', 'openrouter', 'mistral']
+        if llm_provider not in valid_providers:
+            validation_errors.append(f"LLM_PROVIDER must be one of {valid_providers}")
+            
+        if config.get('LLM_TEMPERATURE', 0) < 0 or config.get('LLM_TEMPERATURE', 0) > 2:
+            validation_errors.append("LLM_TEMPERATURE must be between 0 and 2")
+            
+        # Technical Indicators
+        if config.get('ATR_PERIOD', 0) < 5 or config.get('ATR_PERIOD', 0) > 100:
+            validation_errors.append("ATR_PERIOD must be between 5 and 100")
+            
+        if config.get('RSI_PERIOD', 0) < 5 or config.get('RSI_PERIOD', 0) > 50:
+            validation_errors.append("RSI_PERIOD must be between 5 and 50")
+            
+        if config.get('EMA_PERIOD', 0) < 5 or config.get('EMA_PERIOD', 0) > 200:
+            validation_errors.append("EMA_PERIOD must be between 5 and 200")
+            
+        if config.get('WEEKLY_GROWTH_TARGET', 0) < 0.1 or config.get('WEEKLY_GROWTH_TARGET', 0) > 100:
+            validation_errors.append("WEEKLY_GROWTH_TARGET must be between 0.1% and 100%")
+            
+        # Fees
+        if config.get('TAKER_FEE', 0) < 0 or config.get('TAKER_FEE', 0) > 0.01:  # Max 1% fee
+            validation_errors.append("TAKER_FEE must be between 0 and 0.01 (1%)")
+        
+        if validation_errors:
+            logging.error("Configuration validation failed:")
+            for error in validation_errors:
+                logging.error(f"  - {error}")
+            return False
+            
+        return True
+        
+    except Exception as e:
+        logging.error(f"Unexpected error during config validation: {e}")
+        return False
+
 def get_config() -> Dict[str, Any]:
-    """Get configuration from environment variables"""
+    """Get configuration from environment variables with comprehensive validation"""
     try:
         config = {
             # Trading Configuration
@@ -62,8 +148,8 @@ def get_config() -> Dict[str, Any]:
             'TAKER_FEE': get_env_float('TAKER_FEE', 0),
 
             # Risk Management
-            'VOLATILITY_ADJUSTED': os.environ['VOLATILITY_ADJUSTED'].lower() == 'true',
-            'ATR_PERIOD': int(os.environ['ATR_PERIOD']),
+            'VOLATILITY_ADJUSTED': get_env_bool('VOLATILITY_ADJUSTED', False),
+            'ATR_PERIOD': get_env_int('ATR_PERIOD', 14),
             'STOP_LOSS_PERCENT': get_env_float('STOP_LOSS_PERCENT', 2.0),
             'TAKE_PROFIT_PERCENT': get_env_float('TAKE_PROFIT_PERCENT', 4.0),
 
@@ -89,20 +175,20 @@ def get_config() -> Dict[str, Any]:
             'EXCHANGE_API_SECRET': get_env_str('EXCHANGE_API_SECRET', 'PLACEHOLDER'),
             'LLM_API_KEY': get_env_str('LLM_API_KEY', 'PLACEHOLDER'),
             'MIN_CONFIDENCE': get_env_float('MIN_CONFIDENCE', 0),
+            
+            # Additional risk controls
+            'MIN_BALANCE_THRESHOLD': get_env_float('MIN_BALANCE_THRESHOLD', 10.0),
+            'BALANCE_DROP_ALERT_PERCENT': get_env_float('BALANCE_DROP_ALERT_PERCENT', 5.0),
         }
 
         # Add RUN_NAME property
         mode = "paper" if config['FORWARD_TESTING'] else "LIVE"
         config['RUN_NAME'] = f"{mode}_{config['EXCHANGE']}_{config['CRYPTO']}_{config['SYMBOL']}_{config['CYCLE_MINUTES']}min_{config['LEVERAGE']}x"
 
-        # Validate settings
-        if config['LEVERAGE'] < 1 or config['LEVERAGE'] > 125:
-            raise ValueError("Leverage must be between 1 and 125")
-        if config['MARGIN_MODE'].upper() not in ['ISOLATED', 'CROSS']:
-            raise ValueError("Margin mode must be ISOLATED or CROSS")
-        if config['CYCLE_MINUTES'] < 1:
-            raise ValueError("CYCLE_MINUTES must be at least 1")
-
+        # Validate settings with comprehensive checks
+        if not validate_config(config):
+            raise ValueError("Configuration validation failed")
+            
         return config
 
     except Exception as e:
