@@ -123,61 +123,24 @@ class BitunixFutures(BaseExchange):
         """Fetches available and total balance for a given margin coin."""
         app_logger = logging.getLogger("app")
         
-        # Try multiple endpoints and parameter combinations for account balance
-        endpoints_to_try = [
-            "/api/v1/futures/account",
-            "/api/v1/futures/account/get",
-            "/api/v1/futures/account/balance"
-        ]
-        
-        for endpoint in endpoints_to_try:
-            for params in [{}, {"marginCoin": margin_coin}]:
-                try:
-                    data = await self._get(endpoint, params)
-                    if data is None:
-                        continue
-                        
-                    app_logger.info(f"Account data for {margin_coin} from {endpoint} with params {params}: {data}")
+        # Use the working API endpoint that successfully returns account data
+        try:
+            data = await self._get("/api/v1/futures/account", {"marginCoin": margin_coin})
+            if data is None:
+                app_logger.warning(f"No account data returned for {margin_coin}")
+                return 0.0, 0.0
+                
+            app_logger.info(f"Account data for {margin_coin}: {data}")
 
-                    # Handle different response formats
-                    if isinstance(data, list):
-                        for item in data:
-                            if item.get("asset") == margin_coin or item.get("coin") == margin_coin or item.get("currency") == margin_coin:
-                                available = float(item.get("available") or item.get("free") or item.get("availableBalance") or item.get("transfer") or 0.0)
-                                total = float(item.get("total") or item.get("balance") or item.get("totalBalance") or item.get("transfer") or 0.0)
-                                return available, total
-                    elif isinstance(data, dict):
-                        # Check if coin is a key
-                        if margin_coin in data:
-                            coin_data = data[margin_coin]
-                            if isinstance(coin_data, dict):
-                                available = float(coin_data.get("available") or coin_data.get("free") or coin_data.get("availableBalance") or coin_data.get("transfer") or 0.0)
-                                total = float(coin_data.get("total") or coin_data.get("balance") or coin_data.get("totalBalance") or coin_data.get("transfer") or 0.0)
-                                return available, total
-                            elif isinstance(coin_data, (int, float, str)):
-                                # If it's a direct value
-                                total = float(coin_data)
-                                return total, total
+            # Parse the balance data from the API response
+            available = float(data.get("available") or data.get("transfer") or 0.0)
+            total = float(data.get("transfer") or data.get("available") or 0.0)
+            
+            return available, total
 
-                        # Check for direct balance fields in root
-                        available = float(data.get("available") or data.get("free") or data.get("availableBalance") or data.get("transfer") or 0.0)
-                        total = float(data.get("total") or data.get("balance") or data.get("walletBalance") or data.get("equity") or data.get("transfer") or 0.0)
-
-                        # If we found any balance, return it
-                        if total > 0 or available > 0:
-                            return available, total
-
-                        # Last resort: check if the entire dict represents balance
-                        for key, value in data.items():
-                            if isinstance(value, (int, float)) and value > 0:
-                                return float(value), float(value)
-
-                except Exception as e:
-                    app_logger.warning(f"Failed to fetch from {endpoint} with params {params}: {e}")
-                    continue
-        
-        app_logger.warning(f"All attempts to fetch {margin_coin} balance failed")
-        return 0.0, 0.0
+        except Exception as e:
+            app_logger.error(f"Failed to fetch balance for {margin_coin}: {e}")
+            return 0.0, 0.0
 
     async def get_account_balance(self, currency: str) -> float:
         """Get total account balance"""
@@ -191,84 +154,51 @@ class BitunixFutures(BaseExchange):
 
     async def get_pending_positions(self, symbol: str) -> Optional[Position]:
         try:
-            # Try different endpoints for positions
-            endpoints = [
-                "/api/v1/futures/position/list",
-                "/api/v1/futures/position/get_positions",
-                "/api/v1/futures/position/get_pending_positions"
-            ]
+            # Use the working position endpoint that successfully returns position data
+            data = await self._get("/api/v1/futures/position/list", {"symbol": symbol})
+            if not data:
+                return None
 
-            for endpoint in endpoints:
-                try:
-                    data = await self._get(endpoint, {"symbol": symbol})
-                    # Debug: Log the raw API response
-                    logging.info(f"Position API response for {symbol} from {endpoint}: {data}")
-
-                    if not data:
-                        continue
-
-                    for pos in data:
-                        logging.info(f"Checking position: {pos}")
-                        qty = float(pos.get("qty", 0))
-                        if pos.get("symbol") == symbol and qty != 0:
-                            side = "BUY" if qty > 0 else "SELL"
-                            return Position(
-                                positionId=pos["positionId"],
-                                side=side,
-                                size=abs(qty),
-                                entry_price=float(pos["avgOpenPrice"]),
-                                symbol=symbol,
-                                timestamp=int(pos["cTime"]),
-                            )
-                        else:
-                            logging.info(f"Position {pos.get('symbol')} qty {qty} - not matching criteria")
-                except Exception as e:
-                    logging.warning(f"Failed to fetch from {endpoint}: {e}")
-                    continue
-
-            logging.warning(f"No position data returned for {symbol} from any endpoint")
+            for pos in data:
+                qty = float(pos.get("qty", 0))
+                if pos.get("symbol") == symbol and qty != 0:
+                    side = "BUY" if qty > 0 else "SELL"
+                    return Position(
+                        positionId=pos["positionId"],
+                        side=side,
+                        size=abs(qty),
+                        entry_price=float(pos["avgOpenPrice"]),
+                        symbol=symbol,
+                        timestamp=int(pos["cTime"]),
+                    )
             return None
         except Exception as e:
             logging.warning(f"Failed to fetch positions: {e}")
-            logging.warning(f"Exception details: {type(e).__name__}: {e}")
-        return None
+            return None
 
     async def get_all_positions(self, symbol: str) -> List[Position]:
         """Get all positions for the symbol (should only be one for futures)"""
         try:
-            # Try different endpoints for positions
-            endpoints = [
-                "/api/v1/futures/position/list",
-                "/api/v1/futures/position/get_positions",
-                "/api/v1/futures/position/get_pending_positions"
-            ]
+            # Use the working position endpoint
+            data = await self._get("/api/v1/futures/position/list", {"symbol": symbol})
+            if data is None:
+                return []
 
-            for endpoint in endpoints:
-                try:
-                    data = await self._get(endpoint, {"symbol": symbol})
-                    if data is None:
-                        continue
-                    positions = []
-                    for pos in data:
-                        if float(pos.get("qty", 0)) != 0:
-                            side = "BUY" if float(pos["qty"]) > 0 else "SELL"
-                            # Handle missing cTime field gracefully
-                            timestamp = int(pos.get("cTime", time.time() * 1000))
-                            positions.append(Position(
-                                positionId=pos["positionId"],
-                                side=side,
-                                size=abs(float(pos["qty"])),
-                                entry_price=float(pos["avgOpenPrice"]),
-                                symbol=symbol,
-                                timestamp=timestamp,
-                            ))
-                    if positions:  # If we found positions, return them
-                        return positions
-                except Exception as e:
-                    logging.warning(f"Failed to fetch from {endpoint}: {e}")
-                    continue
-
-            return []
+            positions = []
+            for pos in data:
+                if float(pos.get("qty", 0)) != 0:
+                    side = "BUY" if float(pos["qty"]) > 0 else "SELL"
+                    # Handle missing cTime field gracefully
+                    timestamp = int(pos.get("cTime", time.time() * 1000))
+                    positions.append(Position(
+                        positionId=pos["positionId"],
+                        side=side,
+                        size=abs(float(pos["qty"])),
+                        entry_price=float(pos["avgOpenPrice"]),
+                        symbol=symbol,
+                        timestamp=timestamp,
+                    ))
+            return positions
         except Exception as e:
             logging.warning(f"Failed to fetch all positions: {e}")
             return []
