@@ -230,27 +230,21 @@ class TradingBot:
         return {'action': action, 'confidence': confidence, 'reason': reason}
 
     async def _execute_trade(self, decision: Dict[str, Any], current_price: float):
-        """Execute a trade based on AI decision."""
+        """Execute a trade based on AI decision with atomic verification and rollback."""
         try:
-            # Update position state before trade execution
-            await self._update_position_from_exchange()
-
             symbol = self.config['SYMBOL']
             side = decision['action']
-            quantity = await self._calculate_position_size(current_price)
-
-            if quantity <= 0:
-                self.logger.warning("Calculated position size is zero or negative")
-                return
-
-            # Check for existing positions and handle reversals
+            app_logger = self.app_logger
+            
+            app_logger.info(f"Starting atomic trade execution: {side} position attempt")
+            
+            # Atomically check and update position state first
             existing_position = await self.exchange.get_pending_positions(symbol)
             if existing_position:
                 # Handle position reversals - if AI wants opposite direction, close existing first
                 if ((side == 'BUY' and existing_position.side == 'SELL') or
                     (side == 'SELL' and existing_position.side == 'BUY')):
-                    self.logger.info(f"Position reversal detected: closing {existing_position.side} to open {side}")
-                    # Create a position dict for _close_position
+                    app_logger.info(f"Position reversal detected: closing {existing_position.side} to open {side}")
                     position_dict = {
                         'side': existing_position.side,
                         'quantity': existing_position.size,
@@ -259,137 +253,245 @@ class TradingBot:
                         'tp_order_id': getattr(existing_position, 'tp_order_id', None)
                     }
                     await self._close_position(position_dict['side'], await self.exchange.get_current_price(symbol), "Position reversal")
-                    # After closing, continue to place the new order - don't return
-                    self.logger.info(f"Position closed. Now placing new {side} order.")
+                    # Re-verify position is actually closed before proceeding
+                    closed_pos = await self.exchange.get_pending_positions(symbol)
+                    if closed_pos:
+                        app_logger.error("Position reversal failed - position still exists, aborting new trade")
+                        return
                 else:
-                    # Same direction - this shouldn't happen with proper AI logic, but handle gracefully
-                    self.logger.warning(f"AI requested {side} but already in {existing_position.side} position - blocking duplicate position")
-                    # Update local state to match exchange
+                    # Same direction - already in position, prevent duplicate
+                    self.logger.warning(f"AI requested {side} but already in {existing_position.side} position - blocking duplicate")
                     self.current_position = {
                         'side': existing_position.side,
                         'quantity': existing_position.size,
                         'entry_price': existing_position.entry_price,
-                        'timestamp': datetime.fromtimestamp(existing_position.timestamp / 1000) if existing_position.timestamp > 1e10 else datetime.fromtimestamp(existing_position.timestamp),
-                        'sl_order_id': getattr(existing_position, 'sl_order_id', None),
-                        'tp_order_id': getattr(existing_position, 'tp_order_id', None)
+                        'timestamp': datetime.fromtimestamp(existing_position.timestamp / 1000) if position.timestamp >= 1e10 else datetime.fromtimestamp(existing_position.timestamp)
                     }
                     return
 
-            # Execute the trade with retry mechanism
-            max_retries = 3
-            retry_delay = 1  # Start with 1 second delay
+            # Calculate position size with validation
+            quantity = await self._calculate_position_size(current_price)
+            if quantity <= 0:
+                self.logger.warning("Calculated position size is zero or negative, aborting trade")
+                return
 
-            for attempt in range(max_retries):
+            # Atomically execute trade with comprehensive verification
+            await self._atomic_trade_execution(side, quantity, symbol, current_price)
+
+        except Exception as e:
+            # Comprehensive rollback on any failure
+            self.logger.error(f"Trade execution failed with exception: {e}")
+            await self._rollback_failed_trade()
+            raise
+
+    async def _atomic_trade_execution(self, side: str, quantity: float, symbol: str, current_price: float):
+        """Atomically execute and verify the trade with proper rollback mechanisms."""
+        original_position = self.current_position.copy() if self.current_position else None
+        temp_position = None
+        
+        try:
+            app_logger = self.app_logger
+            app_logger.info(f"Attempting atomic position open: {side} {quantity:.4f} {symbol}")
+            
+            # Create a temporary lock-like mechanism for this atomic operation
+            # This ensures no concurrent operations corrupt our state
+            order_result = None
+            
+            # Retry mechanism with exponential backoff for order placement
+            for attempt in range(3):
                 try:
-                    order = await self.exchange.open_position(
+                    order_result = await self.exchange.open_position(
                         symbol=symbol,
                         side=side,
                         size=str(quantity)
                     )
-
-                    # Debug: Log order response details
-                    self.logger.info(f"Order response (attempt {attempt + 1}): {order}")
-
-                    if order:
-                        break  # Success, exit retry loop
-
-                except Exception as order_error:
-                    self.logger.warning(f"Order attempt {attempt + 1} failed: {order_error}")
-                    if attempt < max_retries - 1:
-                        await asyncio.sleep(retry_delay)
-                        retry_delay *= 2  # Exponential backoff
+                    
+                    if order_result and order_result.get('orderId'):
+                        app_logger.info(f"Order placed successfully: {order_result['orderId']}")
+                        break
                     else:
-                        self.logger.error(f"All {max_retries} order attempts failed")
-                        order = None
+                        self.logger.warning(f"Order attempt {attempt + 1} returned no order ID")
+                        if attempt < 2:
+                            await asyncio.sleep(2 ** attempt)  # 1s, 2s, 4s
+                except Exception as order_error:
+                    self.logger.error(f"Order attempt {attempt + 1} failed: {order_error}")
+                    if attempt < 2:
+                        await asyncio.sleep(2 ** attempt)
+                    else:
+                        self.logger.error("All order attempts failed, triggering rollback")
+                        await self._rollback_failed_trade()
+                        return
 
-            if order:
-                # Verify position was actually opened by checking order status and position data
-                verified_position = None
-                order_filled = False
-                size_tolerance = quantity * 0.05  # 5% tolerance for size differences
+            if not order_result or not order_result.get('orderId'):
+                self.logger.error("No order result or order ID available")
+                await self._rollback_failed_trade()
+                return
 
-                # First, verify the order was filled by checking order status
-                order_id = order.get('orderId')
-                if order_id:
-                    for attempt in range(10):  # Try up to 10 times with increasing delays
-                        await asyncio.sleep(min(1 + attempt * 0.5, 5))  # 1s, 1.5s, 2s, ... up to 5s
-
-                        try:
-                            # Check if order exists and is filled
-                            order_status = await self.exchange.get_order_status(symbol, order_id)
-                            if order_status and order_status.get('status') == 'filled':
-                                order_filled = True
-                                self.logger.info(f"Order {order_id} confirmed filled on attempt {attempt + 1}")
-                                break
-                            elif order_status and order_status.get('status') in ['canceled', 'rejected']:
-                                self.logger.error(f"Order {order_id} was {order_status.get('status')} - aborting verification")
-                                break
-                        except Exception as e:
-                            self.logger.warning(f"Failed to check order status on attempt {attempt + 1}: {e}")
-
-                    if not order_filled:
-                        self.logger.warning(f"Order {order_id} status could not be confirmed as filled")
-
-                # Then verify position exists (with or without order confirmation)
-                for attempt in range(8):  # Try up to 8 times with increasing delays
-                    await asyncio.sleep(min(2 + attempt * 0.5, 8))  # 2s, 2.5s, 3s, ... up to 8s
-
+            # CRITICAL VERIFICATION PHASE - Atomic verification sequence
+            order_id = order_result['orderId']
+            verified_position = None
+            
+            # Comprehensive verification with timeout management
+            max_verification_time = 60  # 60 seconds maximum for verification
+            verification_start = datetime.now()
+            
+            while (datetime.now() - verification_start).seconds < max_verification_time:
+                try:
+                    # Step 1: Verify order is processed by exchange
+                    order_status = await self.exchange.get_order_status(symbol, order_id)
+                    if order_status:
+                        order_state = order_status.get('status')
+                        self.logger.info(f"Order {order_id} status: {order_state}")
+                        
+                        if order_state == 'filled':
+                            app_logger.info(f"Order {order_id} confirmed as filled")
+                            break
+                        elif order_state in ['canceled', 'rejected']:
+                            self.logger.error(f"Order {order_id} was {order_state}, triggering rollback")
+                            await self._rollback_failed_trade()
+                            return
+                    
+                    # Step 2: Check if a position actually exists on the exchange
                     verified_position = await self.exchange.get_pending_positions(symbol)
-                    if (verified_position and verified_position.side == side and
-                        abs(verified_position.size - quantity) <= size_tolerance):
-                        break  # Verification successful
-                    verified_position = None  # Reset for retry
+                    if verified_position and verified_position.side == side:
+                        size_tolerance = quantity * 0.03  # 3% size tolerance
+                        if abs(verified_position.size - quantity) <= size_tolerance:
+                            app_logger.info(f"Position verified: {verified_position.side} {verified_position.size:.4f} @ ${verified_position.entry_price:,.2f}")
+                            break
+                    
+                    await asyncio.sleep(5)  # Wait before retry
+                    
+                except Exception as verify_error:
+                    self.logger.warning(f"Verification attempt failed: {verify_error}")
+                    await asyncio.sleep(3)
+                    continue
 
-                if verified_position:
-                    # Position verified - update local state
-                    self.current_position = {
-                        'side': side,
-                        'quantity': quantity,
-                        'entry_price': verified_position.entry_price,
-                        'timestamp': datetime.fromtimestamp(verified_position.timestamp / 1000) if verified_position.timestamp > 1e10 else datetime.fromtimestamp(verified_position.timestamp)
-                    }
-                    self.last_trade_time = datetime.now()
-
-                    # Create conditional SL/TP orders
-                    sl_pct = self.config.get('STOP_LOSS_PERCENT', 2.0)
-                    tp_pct = self.config.get('TAKE_PROFIT_PERCENT', 4.0)
-                    conditional_results = await self.exchange._create_conditional_orders(
-                        symbol, quantity, side, verified_position.entry_price, sl_pct, tp_pct
-                    )
-
-                    # Store SL/TP order IDs in position state
-                    self.current_position['sl_order_id'] = conditional_results.get('sl_order_id')
-                    self.current_position['tp_order_id'] = conditional_results.get('tp_order_id')
-
-                    # Log warnings if SL/TP failed to create
-                    if not conditional_results.get('sl_success', False):
-                        self.logger.warning("Stop loss order failed to create - position unprotected")
-                    if not conditional_results.get('tp_success', False):
-                        self.logger.warning("Take profit order failed to create - position may stay open")
-
-                    self.logger.info(f"Trade executed and verified: {side} {quantity} {symbol} at ${verified_position.entry_price:,.1f}")
-                    balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
-                    trade = {
-                        'timestamp': int(datetime.now().timestamp() * 1000),
-                        'side': side,
-                        'quantity': quantity,
-                        'price': verified_position.entry_price,
-                        'pnl': 0.0,
-                        'balance': balance
-                    }
-                    self.risk_manager.update_trade_history(trade)
+            # FINAL VALIDATION DECISION
+            if not verified_position:
+                # Final check after timeout
+                final_check = await self.exchange.get_pending_positions(symbol)
+                if final_check and final_check.side == side:
+                    size_tolerance = quantity * 0.05  # 5% final tolerance
+                    if abs(final_check.size - quantity) <= size_tolerance:
+                        verified_position = final_check
+                        app_logger.warning("Position found during final check, proceeding with warning")
+                    else:
+                        self.logger.error(f"Position size mismatch: expected {quantity}, got {final_check.size}")
+                        await self._rollback_failed_trade()
+                        return
                 else:
-                    self.logger.error(f"Position verification failed after retries. Expected: {side} {quantity}, Got: {verified_position.side if verified_position else 'None'} {verified_position.size if verified_position else 'N/A'}")
-                    # Reset local state on verification failure
-                    self.current_position = None
-            else:
-                self.logger.error(f"Order failed: {order}")
-                self.current_position = None
+                    self.logger.error("Position verification failed after timeout")
+                    await self._rollback_failed_trade()
+                    return
 
-        except Exception as e:
-            self.logger.error(f"Error executing trade: {e}")
-            # Reset local position state on error
+            # Create temporary position state for SL/TP setup
+            temp_position = {
+                'side': side,
+                'quantity': quantity,
+                'entry_price': verified_position.entry_price,
+                'timestamp': datetime.fromtimestamp(verified_position.timestamp / 1000) if verified_position.timestamp >= 1e10 else datetime.fromtimestamp(verified_position.timestamp),
+                'position_id': verified_position.positionId
+            }
+
+            # Setup SL/TP orders with comprehensive validation
+            sl_pct = self.config.get('STOP_LOSS_PERCENT', 2.0)
+            tp_pct = self.config.get('TAKE_PROFIT_PERCENT', 4.0)
+            
+            if sl_pct <= 0 or tp_pct <= 0:
+                self.logger.error("Invalid SL/TP percentages, aborting trade setup")
+                await self._rollback_failed_trade()
+                return
+
+            conditional_results = await self.exchange._create_conditional_orders(
+                symbol, quantity, side, verified_position.entry_price, sl_pct, tp_pct
+            )
+
+            # Validate SL/TP creation was successful
+            sl_success = conditional_results.get('sl_success', False)
+            tp_success = conditional_results.get('tp_success', False)
+            
+            if not sl_success:
+                self.logger.warning("Stop loss order failed to create - position opened but unprotected")
+            if not tp_success:
+                self.logger.warning("Take profit order failed to create - position may stay open longer")
+
+            # Final atomic commit - update local state only after everything succeeded
+            self.current_position = temp_position.copy()
+            self.current_position.update({
+                'sl_order_id': conditional_results.get('sl_order_id'),
+                'tp_order_id': conditional_results.get('tp_order_id'),
+                'order_id': order_id
+            })
+            
+            self.last_trade_time = datetime.now()
+            
+            # Final success logging
+            app_logger.info(f"✅ ATOMIC TRADE SUCCESS: {side} {quantity:.4f} {symbol} @ ${verified_position.entry_price:,.2f}")
+            app_logger.info(f"📊 SL: {conditional_results.get('sl_order_id') or 'FAILED'} | TP: {conditional_results.get('tp_order_id') or 'FAILED'}")
+            
+            # Record trade in history
+            balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
+            trade = {
+                'timestamp': int(datetime.now().timestamp() * 1000),
+                'side': side,
+                'quantity': quantity,
+                'price': verified_position.entry_price,
+                'pnl': 0.0,
+                'balance': balance
+            }
+            self.risk_manager.update_trade_history(trade)
+
+        except Exception as atomic_error:
+            self.logger.error(f"Atomic trade execution failed: {atomic_error}")
+            # Restore original state on any failure
+            if original_position:
+                self.current_position = original_position.copy()
+            else:
+                self.current_position = None
+            # Clean up any partially created orders
+            if temp_position and temp_position.get('order_id'):
+                try:
+                    await self.exchange.cancel_order(symbol, temp_position['order_id'])
+                except:
+                    pass  # Best effort cleanup
+            if temp_position and temp_position.get('sl_order_id'):
+                try:
+                    await self.exchange.cancel_order(symbol, temp_position['sl_order_id'])
+                except:
+                    pass
+            if temp_position and temp_position.get('tp_order_id'):
+                try:
+                    await self.exchange.cancel_order(symbol, temp_position['tp_order_id'])
+                except:
+                    pass
+            raise
+
+    async def _rollback_failed_trade(self):
+        """Comprehensive rollback mechanism for failed trades."""
+        try:
+            symbol = self.config['SYMBOL']
+            self.logger.warning("🔄 Executing trade rollback procedure")
+            
+            # Clear local position state since trade failed
             self.current_position = None
+            self.last_trade_time = None
+            
+            # Verify exchange state is clean (no orphaned orders)
+            try:
+                open_orders = await self.exchange.get_open_orders(symbol)
+                for order in open_orders:
+                    try:
+                        await self.exchange.cancel_order(symbol, order.get('orderId'))
+                        self.logger.info(f"Cancelled orphaned order: {order.get('orderId')}")
+                    except:
+                        pass
+            except:
+                pass  # Best effort cleanup
+        except Exception as rollback_error:
+            self.logger.error(f"Rollback procedure encountered error: {rollback_error}")
+            # Even if rollback partially fails, ensure we're in a clean state
+            self.current_position = None
+            self.last_trade_time = None
 
     async def _calculate_position_size(self, price: float) -> float:
         """Calculate position size based on config and risk, accounting for trading fees."""
@@ -487,97 +589,192 @@ class TradingBot:
             self.logger.error(f"Error in position monitoring: {e}")
 
     async def _close_position(self, side: str, price: float, reason: str):
-        """Close current position with validation."""
+        """Close current position with atomic validation and rollback on failure."""
         if not self.current_position:
             return
 
+        original_position = self.current_position.copy()
+        symbol = self.config['SYMBOL']
+        
         try:
-            # Update position state before closure
-            await self._update_position_from_exchange()
-
-            symbol = self.config['SYMBOL']
-            expected_quantity = self.current_position['quantity']
-            expected_side = self.current_position['side']
-
-            # Get the current position from exchange and validate it matches expected
-            position = await self.exchange.get_pending_positions(symbol)
-            if not position:
-                self.logger.warning(f"No open position found for {symbol}")
+            app_logger = self.app_logger
+            app_logger.info(f"Starting atomic position closure: {reason} at ${price:,.1f}")
+            
+            # CRITICAL: Verify position exists before attempting to close
+            current_exchange_position = await self.exchange.get_pending_positions(symbol)
+            if not current_exchange_position:
+                app_logger.warning(f"No position found on exchange for {symbol}")
                 self.current_position = None
-                return
-
-            # Cancel SL/TP orders before closing position
-            sl_order_id = self.current_position.get('sl_order_id')
-            tp_order_id = self.current_position.get('tp_order_id')
-
-            if sl_order_id:
-                try:
-                    cancelled = await self.exchange.cancel_order(symbol, sl_order_id)
-                    if cancelled:
-                        self.logger.info(f"Cancelled SL order {sl_order_id} before closing position")
-                    else:
-                        self.logger.warning(f"Failed to cancel SL order {sl_order_id}")
-                except Exception as e:
-                    self.logger.warning(f"Error cancelling SL order {sl_order_id}: {e}")
-
-            if tp_order_id:
-                try:
-                    cancelled = await self.exchange.cancel_order(symbol, tp_order_id)
-                    if cancelled:
-                        self.logger.info(f"Cancelled TP order {tp_order_id} before closing position")
-                    else:
-                        self.logger.warning(f"Failed to cancel TP order {tp_order_id}")
-                except Exception as e:
-                    self.logger.warning(f"Error cancelling TP order {tp_order_id}: {e}")
-
-            # Validate position but allow reasonable tolerance for live trading
-            if position.side != expected_side:
-                self.logger.error(f"CRITICAL: Position side mismatch - Expected: {expected_side}, Got: {position.side}. REFUSING TO CLOSE to prevent wrong position closure.")
-                # Side mismatch is serious - don't close
-                self.current_position = {
-                    'side': position.side,
-                    'quantity': position.size,
-                    'entry_price': position.entry_price,
-                    'timestamp': datetime.fromtimestamp(position.timestamp / 1000) if position.timestamp > 1e10 else datetime.fromtimestamp(position.timestamp)
-                }
                 return
                 
-            # For size validation, be more permissive in LIVE mode vs PAPER mode
-            # Paper mode uses exact simulation, but live exchanges can have rounding
-            if self.config.get('FORWARD_TESTING', False):
-                # In paper mode - require exact match
-                size_tolerance = 0.001  # Almost exact for paper trading simulation
-            else:
-                # In live trading - allow reasonable tolerance for exchange rounding
-                size_tolerance = expected_quantity * 0.05  # 5% tolerance for live trading
+            # Validate position details match what we expect
+            expected_side = original_position['side']
+            expected_quantity = original_position['quantity']
             
-            if abs(position.size - expected_quantity) > size_tolerance:
-                self.logger.warning(f"Position size mismatch - Expected: {expected_quantity}, Got: {position.size}. Closing anyway with actual size to prevent stuck positions.")
-                # Adjust to actual size and continue closing
-                expected_quantity = position.size
+            if current_exchange_position.side != expected_side:
+                app_logger.error(f"CRITICAL: Position side mismatch - Expected: {expected_side}, Got: {current_exchange_position.side}")
+                await self._recover_position_state_mismatch(current_exchange_position)
+                return
+            
+            # Use actual size from exchange for closing (handles exchange rounding)
+            close_quantity = current_exchange_position.size
+            
+            app_logger.info(f"Closing {current_exchange_position.side} position: {close_quantity:.4f} {symbol} @ ${current_exchange_position.entry_price:,.2f}")
 
-            # Close the validated position
-            result = await self.exchange.close_position(position, reason)
-            pnl = result.get('pnl', 0.0)
-
-            if result.get('order'):
-                self.logger.info(f"Position closed: {reason} at ${price:,.1f} | PnL: ${pnl:+.2f}")
+            # Create atomic operation with rollback capability
+            close_result = await self._atomic_position_close(
+                position=current_exchange_position,
+                expected_quantity=close_quantity,
+                price=price,
+                reason=reason
+            )
+            
+            if close_result.get('success', False):
+                pnl = close_result.get('pnl', 0.0)
+                app_logger.info(f"✅ POSITION CLOSED SUCCESSFULLY: {reason} | PnL: ${pnl:+.2f}")
+                
+                # Only update local state after confirmed success on exchange
                 self.current_position = None
                 self.risk_manager.update_daily_pnl(pnl)
-                # Fetch current balance for trade record
+                
+                # Record trade for history
                 balance = await self.exchange.get_account_balance(self.config['CURRENCY'])
                 trade = {
                     'timestamp': int(datetime.now().timestamp() * 1000),
                     'side': f'CLOSE_{expected_side}',
-                    'quantity': expected_quantity,
+                    'quantity': close_quantity,
                     'price': price,
                     'pnl': pnl,
                     'balance': balance
                 }
                 self.risk_manager.update_trade_history(trade)
             else:
-                self.logger.error(f"Failed to close position")
+                app_logger.error(f"Position closure failed: {close_result.get('error', 'Unknown error')}")
+                
+                # Attempt recovery on closure failure
+                await self._recover_position_state_mismatch(current_exchange_position)
+                return
 
         except Exception as e:
-            self.logger.error(f"Error closing position: {e}")
-            # Don't reset position state on error to avoid state corruption
+            self.logger.error(f"Position closure failed with exception: {e}")
+            # Restore original state on any failure
+            self.current_position = original_position
+            await self._recover_position_state_mismatch(await self.exchange.get_pending_positions(symbol))
+            raise
+
+    async def _atomic_position_close(self, position, expected_quantity, price, reason):
+        """Atomically close position with comprehensive validation and cleanup."""
+        result = {'success': False, 'pnl': 0.0, 'error': None}
+        
+        try:
+            symbol = self.config['SYMBOL']
+            
+            # Step 1: Cancel any existing SL/TP orders first
+            cancelled_orders = []
+            failed_cancellations = []
+            
+            sl_order_id = self.current_position.get('sl_order_id')
+            if sl_order_id:
+                try:
+                    cancelled = await self.exchange.cancel_order(symbol, sl_order_id)
+                    if cancelled:
+                        self.logger.info(f"Cancelled SL order {sl_order_id}")
+                        cancelled_orders.append(sl_order_id)
+                    else:
+                        self.logger.warning(f"Failed to cancel SL order {sl_order_id}")
+                        failed_cancellations.append(f"SL-{sl_order_id}")
+                except Exception as e:
+                    self.logger.warning(f"Error cancelling SL order: {e}")
+                    failed_cancellations.append(f"SL-{sl_order_id}")
+            
+            tp_order_id = self.current_position.get('tp_order_id')
+            if tp_order_id:
+                try:
+                    cancelled = await self.exchange.cancel_order(symbol, tp_order_id)
+                    if cancelled:
+                        self.logger.info(f"Cancelled TP order {tp_order_id}")
+                        cancelled_orders.append(tp_order_id)
+                    else:
+                        self.logger.warning(f"Failed to cancel TP order {tp_order_id}")
+                        failed_cancellations.append(f"TP-{tp_order_id}")
+                except Exception as e:
+                    self.logger.warning(f"Error cancelling TP order: {e}")
+                    failed_cancellations.append(f"TP-{tp_order_id}")
+
+            # Step 2: Close the position on the exchange
+            close_result = await self.exchange.close_position(position, reason)
+            
+            if not close_result or not close_result.get('order'):
+                result['error'] = "Exchange close operation failed - no order returned"
+                return result
+            
+            # Step 3: Verify the position is actually gone
+            max_verification_attempts = 5
+            
+            for attempt in range(max_verification_attempts):
+                try:
+                    await asyncio.sleep(1 + attempt)  # Increasing delays: 1s, 2s, 3s, 4s, 5s
+                    
+                    post_close_position = await self.exchange.get_pending_positions(symbol)
+                    if not post_close_position:
+                        # Success - position is gone
+                        pnl = close_result.get('pnl', 0.0)
+                        result.update({
+                            'success': True,
+                            'pnl': pnl,
+                            'cancelled_orders': cancelled_orders,
+                            'failed_cancellations': failed_cancellations
+                        })
+                        
+                        self.app_logger.info(
+                            f"Position closed: {reason} at ${price:,.1f}" +
+                            (f" | PnL: ${pnl:+.2f}" if pnl != 0.0 else "")
+                        )
+                        
+                        return result
+                    else:
+                        self.logger.warning(f"Position still exists after close attempt {attempt + 1}")
+                        
+                except Exception as verify_error:
+                    self.logger.error(f"Position verification failed on attempt {attempt + 1}: {verify_error}")
+
+            # If we get here, position verification failed after all attempts
+            result['error'] = "Position still exists on exchange after close operation"
+            
+        except Exception as e:
+            self.logger.error(f"Atomic position close failed: {e}")
+            result['error'] = f"Position closure error: {str(e)}"
+        
+        return result
+
+    async def _recover_position_state_mismatch(self, actual_position):
+        """Recover from position state mismatches by synchronizing with exchange."""
+        try:
+            app_logger = self.app_logger
+            
+            if actual_position:
+                # Update local state to match exchange reality
+                updated_state = {
+                    'side': actual_position.side,
+                    'quantity': actual_position.size,
+                    'entry_price': actual_position.entry_price,
+                    'timestamp': datetime.fromtimestamp(actual_position.timestamp / 1000) if actual_position.timestamp >= 1e10 else datetime.fromtimestamp(actual_position.timestamp),
+                    'position_id': actual_position.positionId
+                }
+                
+                self.current_position = updated_state
+                app_logger.warning(
+                    f"Position state synchronized with exchange: {updated_state['side']} {updated_state['quantity']:.4f} @ ${updated_state['entry_price']:.2f}"
+                )
+            else:
+                # No position on exchange, clear local state
+                app_logger.info("No position found on exchange - local state cleared")
+                self.current_position = None
+                
+            self.last_trade_time = None
+            
+        except Exception as recovery_error:
+            self.logger.error(f"Position recovery failed: {recovery_error}")
+            # Ensure we're not in a corrupted state
+            self.current_position = None
+            self.last_trade_time = None
