@@ -35,6 +35,7 @@ class BitunixAuth:
             "timestamp": timestamp,
             "sign": self._generate_signature(nonce, timestamp, query_params, body),
             "Content-Type": "application/json",
+            "language": "en-US",
         }
 
 
@@ -121,50 +122,61 @@ class BitunixFutures(BaseExchange):
     async def _get_margin_balance(self, margin_coin: str) -> Tuple[float, float]:
         """Fetches available and total balance for a given margin coin."""
         app_logger = logging.getLogger("app")
-        try:
-            data = await self._get("/api/v1/futures/account", {})
-            app_logger.info(f"Account data for {margin_coin}: {data}")
+        
+        # Try multiple endpoints and parameter combinations for account balance
+        endpoints_to_try = [
+            "/api/v1/futures/account",
+            "/api/v1/futures/account/get",
+            "/api/v1/futures/account/balance"
+        ]
+        
+        for endpoint in endpoints_to_try:
+            for params in [{}, {"marginCoin": margin_coin}]:
+                try:
+                    data = await self._get(endpoint, params)
+                    if data is None:
+                        continue
+                        
+                    app_logger.info(f"Account data for {margin_coin} from {endpoint} with params {params}: {data}")
 
-            # Handle different response formats
-            if isinstance(data, list):
-                for item in data:
-                    if item.get("asset") == margin_coin or item.get("coin") == margin_coin or item.get("currency") == margin_coin:
-                        available = float(item.get("available") or item.get("free") or item.get("availableBalance") or 0.0)
-                        total = float(item.get("total") or item.get("balance") or item.get("totalBalance") or 0.0)
-                        return available, total
-            elif isinstance(data, dict):
-                # Check if coin is a key
-                if margin_coin in data:
-                    coin_data = data[margin_coin]
-                    if isinstance(coin_data, dict):
-                        available = float(coin_data.get("available") or coin_data.get("free") or coin_data.get("availableBalance") or 0.0)
-                        total = float(coin_data.get("total") or coin_data.get("balance") or coin_data.get("totalBalance") or 0.0)
-                        return available, total
-                    elif isinstance(coin_data, (int, float, str)):
-                        # If it's a direct value
-                        total = float(coin_data)
-                        return total, total
+                    # Handle different response formats
+                    if isinstance(data, list):
+                        for item in data:
+                            if item.get("asset") == margin_coin or item.get("coin") == margin_coin or item.get("currency") == margin_coin:
+                                available = float(item.get("available") or item.get("free") or item.get("availableBalance") or 0.0)
+                                total = float(item.get("total") or item.get("balance") or item.get("totalBalance") or 0.0)
+                                return available, total
+                    elif isinstance(data, dict):
+                        # Check if coin is a key
+                        if margin_coin in data:
+                            coin_data = data[margin_coin]
+                            if isinstance(coin_data, dict):
+                                available = float(coin_data.get("available") or coin_data.get("free") or coin_data.get("availableBalance") or 0.0)
+                                total = float(coin_data.get("total") or coin_data.get("balance") or coin_data.get("totalBalance") or 0.0)
+                                return available, total
+                            elif isinstance(coin_data, (int, float, str)):
+                                # If it's a direct value
+                                total = float(coin_data)
+                                return total, total
 
-                # Check for direct balance fields in root
-                available = float(data.get("availableBalance") or data.get("available") or data.get("free") or 0.0)
-                total = float(data.get("totalBalance") or data.get("balance") or data.get("walletBalance") or data.get("equity") or 0.0)
+                        # Check for direct balance fields in root
+                        available = float(data.get("availableBalance") or data.get("available") or data.get("free") or 0.0)
+                        total = float(data.get("totalBalance") or data.get("balance") or data.get("walletBalance") or data.get("equity") or 0.0)
 
-                # If we found any balance, return it
-                if total > 0 or available > 0:
-                    return available, total
+                        # If we found any balance, return it
+                        if total > 0 or available > 0:
+                            return available, total
 
-                # Last resort: check if the entire dict represents balance
-                for key, value in data.items():
-                    if isinstance(value, (int, float)) and value > 0:
-                        return float(value), float(value)
+                        # Last resort: check if the entire dict represents balance
+                        for key, value in data.items():
+                            if isinstance(value, (int, float)) and value > 0:
+                                return float(value), float(value)
 
-            return 0.0, 0.0
-        except RetryError as e:
-            app_logger.warning(
-                f"Failed to fetch {margin_coin} balance after multiple retries: {e}")
-        except Exception as e:
-            # This will catch other exceptions, including API errors
-            app_logger.warning(f"Could not fetch {margin_coin} balance: {e}")
+                except Exception as e:
+                    app_logger.warning(f"Failed to fetch from {endpoint} with params {params}: {e}")
+                    continue
+        
+        app_logger.warning(f"All attempts to fetch {margin_coin} balance failed")
         return 0.0, 0.0
 
     async def get_account_balance(self, currency: str) -> float:
