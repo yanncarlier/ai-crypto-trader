@@ -18,6 +18,7 @@ class RiskManager:
     def __init__(self, config, exchange):
         self.config = config
         self.exchange = exchange
+        self.logger = logging.getLogger("risk")  # Add logger
         self.risk_params = RiskParameters(
             volatility_adjusted=config.get('VOLATILITY_ADJUSTED', True),
             atr_period=config.get('ATR_PERIOD', 14),

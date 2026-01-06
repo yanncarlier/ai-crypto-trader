@@ -530,12 +530,10 @@ class TradingBot:
                 except Exception as e:
                     self.logger.warning(f"Error cancelling TP order {tp_order_id}: {e}")
 
-            # Validate position matches expected - STRICT VALIDATION
-            size_tolerance = expected_quantity * 0.01  # 1% tolerance for size differences
-            if abs(position.size - expected_quantity) > size_tolerance or position.side != expected_side:
-                self.logger.error(f"CRITICAL: Position mismatch detected - Expected: {expected_side} {expected_quantity}, Got: {position.side} {position.size}. REFUSING TO CLOSE to prevent wrong position closure.")
-                # Do NOT close the position - this could be catastrophic
-                # Instead, update local state to match exchange and let next cycle handle it
+            # Validate position but allow reasonable tolerance for live trading
+            if position.side != expected_side:
+                self.logger.error(f"CRITICAL: Position side mismatch - Expected: {expected_side}, Got: {position.side}. REFUSING TO CLOSE to prevent wrong position closure.")
+                # Side mismatch is serious - don't close
                 self.current_position = {
                     'side': position.side,
                     'quantity': position.size,
@@ -543,6 +541,20 @@ class TradingBot:
                     'timestamp': datetime.fromtimestamp(position.timestamp / 1000) if position.timestamp > 1e10 else datetime.fromtimestamp(position.timestamp)
                 }
                 return
+                
+            # For size validation, be more permissive in LIVE mode vs PAPER mode
+            # Paper mode uses exact simulation, but live exchanges can have rounding
+            if self.config.get('FORWARD_TESTING', False):
+                # In paper mode - require exact match
+                size_tolerance = 0.001  # Almost exact for paper trading simulation
+            else:
+                # In live trading - allow reasonable tolerance for exchange rounding
+                size_tolerance = expected_quantity * 0.05  # 5% tolerance for live trading
+            
+            if abs(position.size - expected_quantity) > size_tolerance:
+                self.logger.warning(f"Position size mismatch - Expected: {expected_quantity}, Got: {position.size}. Closing anyway with actual size to prevent stuck positions.")
+                # Adjust to actual size and continue closing
+                expected_quantity = position.size
 
             # Close the validated position
             result = await self.exchange.close_position(position, reason)

@@ -164,12 +164,13 @@ class BitunixFutures(BaseExchange):
                 if pos.get("symbol") == symbol and qty != 0:
                     side = "BUY" if qty > 0 else "SELL"
                     return Position(
-                        positionId=pos["positionId"],
-                        side=side,
+                        positionId=pos.get("positionId", ""),
                         size=abs(qty),
-                        entry_price=float(pos["avgOpenPrice"]),
+                        side=side,
+                        entry_price=float(pos.get("avgOpenPrice", 0)),
                         symbol=symbol,
-                        timestamp=int(pos["cTime"]),
+                        timestamp=int(
+                            pos.get("cTime", time.time() * 1000)),
                     )
             return None
         except Exception as e:
@@ -177,7 +178,7 @@ class BitunixFutures(BaseExchange):
             return None
 
     async def get_all_positions(self, symbol: str) -> List[Position]:
-        """Get all positions for the symbol (should only be one for futures)"""
+        """Get all positions for the symbol (should only be one for futures)."""
         try:
             # Use the working position endpoint
             data = await self._get("/api/v1/futures/position/list", {"symbol": symbol})
@@ -186,15 +187,18 @@ class BitunixFutures(BaseExchange):
 
             positions = []
             for pos in data:
-                if float(pos.get("qty", 0)) != 0:
-                    side = "BUY" if float(pos["qty"]) > 0 else "SELL"
+                qty = float(pos.get("qty", 0))
+                if qty != 0:
+                    side = "BUY" if qty > 0 else "SELL"
                     # Handle missing cTime field gracefully
-                    timestamp = int(pos.get("cTime", time.time() * 1000))
+                    timestamp = int(
+                        pos.get("cTime", time.time() * 1000))
                     positions.append(Position(
-                        positionId=pos["positionId"],
+                        positionId=pos.get("positionId", ""),
                         side=side,
-                        size=abs(float(pos["qty"])),
-                        entry_price=float(pos["avgOpenPrice"]),
+                        size=abs(qty),
+                        entry_price=float(
+                            pos.get("avgOpenPrice", 0)),
                         symbol=symbol,
                         timestamp=timestamp,
                     ))
