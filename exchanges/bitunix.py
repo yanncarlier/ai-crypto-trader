@@ -143,16 +143,16 @@ class BitunixFutures(BaseExchange):
                     if isinstance(data, list):
                         for item in data:
                             if item.get("asset") == margin_coin or item.get("coin") == margin_coin or item.get("currency") == margin_coin:
-                                available = float(item.get("available") or item.get("free") or item.get("availableBalance") or 0.0)
-                                total = float(item.get("total") or item.get("balance") or item.get("totalBalance") or 0.0)
+                                available = float(item.get("available") or item.get("free") or item.get("availableBalance") or item.get("transfer") or 0.0)
+                                total = float(item.get("total") or item.get("balance") or item.get("totalBalance") or item.get("transfer") or 0.0)
                                 return available, total
                     elif isinstance(data, dict):
                         # Check if coin is a key
                         if margin_coin in data:
                             coin_data = data[margin_coin]
                             if isinstance(coin_data, dict):
-                                available = float(coin_data.get("available") or coin_data.get("free") or coin_data.get("availableBalance") or 0.0)
-                                total = float(coin_data.get("total") or coin_data.get("balance") or coin_data.get("totalBalance") or 0.0)
+                                available = float(coin_data.get("available") or coin_data.get("free") or coin_data.get("availableBalance") or coin_data.get("transfer") or 0.0)
+                                total = float(coin_data.get("total") or coin_data.get("balance") or coin_data.get("totalBalance") or coin_data.get("transfer") or 0.0)
                                 return available, total
                             elif isinstance(coin_data, (int, float, str)):
                                 # If it's a direct value
@@ -160,8 +160,8 @@ class BitunixFutures(BaseExchange):
                                 return total, total
 
                         # Check for direct balance fields in root
-                        available = float(data.get("availableBalance") or data.get("available") or data.get("free") or 0.0)
-                        total = float(data.get("totalBalance") or data.get("balance") or data.get("walletBalance") or data.get("equity") or 0.0)
+                        available = float(data.get("available") or data.get("free") or data.get("availableBalance") or data.get("transfer") or 0.0)
+                        total = float(data.get("total") or data.get("balance") or data.get("walletBalance") or data.get("equity") or data.get("transfer") or 0.0)
 
                         # If we found any balance, return it
                         if total > 0 or available > 0:

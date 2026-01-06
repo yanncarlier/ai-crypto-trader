@@ -142,19 +142,19 @@ def get_config() -> Dict[str, Any]:
             'CRYPTO': get_env_str('CRYPTO', 'BTC'),
             'SYMBOL': get_env_str('SYMBOL', 'BTCUSDT'),
             'CURRENCY': get_env_str('CURRENCY', 'USDT'),
-            'CYCLE_MINUTES': get_env_float('CYCLE_MINUTES', 0),
-            'LEVERAGE': get_env_int('LEVERAGE', 2),
-            'MARGIN_MODE': get_env_str('MARGIN_MODE', 'PLACEHOLDER'),
-            'TAKER_FEE': get_env_float('TAKER_FEE', 0),
+            'CYCLE_MINUTES': get_env_float('CYCLE_MINUTES', 5),
+            'LEVERAGE': get_env_int('LEVERAGE', 20),
+            'MARGIN_MODE': get_env_str('MARGIN_MODE', 'ISOLATED'),
+            'TAKER_FEE': get_env_float('TAKER_FEE', 0.0006),
 
             # Risk Management
-            'VOLATILITY_ADJUSTED': get_env_bool('VOLATILITY_ADJUSTED', False),
+            'VOLATILITY_ADJUSTED': get_env_bool('VOLATILITY_ADJUSTED', True),
             'ATR_PERIOD': get_env_int('ATR_PERIOD', 14),
             'STOP_LOSS_PERCENT': get_env_float('STOP_LOSS_PERCENT', 2.0),
             'TAKE_PROFIT_PERCENT': get_env_float('TAKE_PROFIT_PERCENT', 4.0),
 
             # AI Prompt Configuration
-            'MAX_RISK_PERCENT': get_env_float('MAX_RISK_PERCENT', 1.0),
+            'MAX_RISK_PERCENT': get_env_float('MAX_RISK_PERCENT', 2.0),
             'MIN_RISK_REWARD_RATIO': get_env_float('MIN_RISK_REWARD_RATIO', 2.0),
             'CONFIDENCE_THRESHOLD': get_env_float('CONFIDENCE_THRESHOLD', 0.7),
             'WEEKLY_GROWTH_TARGET': get_env_float('WEEKLY_GROWTH_TARGET', 5.0),
@@ -165,20 +165,20 @@ def get_config() -> Dict[str, Any]:
             'OHLCV_LIMIT': get_env_int('OHLCV_LIMIT', 7),
 
             # Configuration
-            'FORWARD_TESTING': get_env_bool('FORWARD_TESTING', False),
-            'LLM_PROVIDER': get_env_str('LLM_PROVIDER', 'PLACEHOLDER'),
-            'LLM_MODEL': get_env_str('LLM_MODEL', 'PLACEHOLDER'),
-            'LLM_TEMPERATURE': get_env_float('LLM_TEMPERATURE', 0),
-            'LLM_MAX_TOKENS': get_env_int('LLM_MAX_TOKENS', 0),
-            'EXCHANGE': get_env_str('EXCHANGE', 'PLACEHOLDER'),
-            'EXCHANGE_API_KEY': get_env_str('EXCHANGE_API_KEY', 'PLACEHOLDER'),
-            'EXCHANGE_API_SECRET': get_env_str('EXCHANGE_API_SECRET', 'PLACEHOLDER'),
-            'LLM_API_KEY': get_env_str('LLM_API_KEY', 'PLACEHOLDER'),
-            'MIN_CONFIDENCE': get_env_float('MIN_CONFIDENCE', 0),
+            'FORWARD_TESTING': get_env_bool('FORWARD_TESTING', True),
+            'LLM_PROVIDER': get_env_str('LLM_PROVIDER', 'groq'),
+            'LLM_MODEL': get_env_str('LLM_MODEL', 'groq/compound'),
+            'LLM_TEMPERATURE': get_env_float('LLM_TEMPERATURE', 0.3),
+            'LLM_MAX_TOKENS': get_env_int('LLM_MAX_TOKENS', 2000),
+            'EXCHANGE': get_env_str('EXCHANGE', 'BITUNIX'),
+            'EXCHANGE_API_KEY': get_env_str('EXCHANGE_API_KEY', '60086b3996c56af70d43a221ed28bafa'),
+            'EXCHANGE_API_SECRET': get_env_str('EXCHANGE_API_SECRET', '4c9ca7f5f4cbe3701c33cbdd8a01be12'),
+            'LLM_API_KEY': get_env_str('LLM_API_KEY', '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'),
+            'MIN_CONFIDENCE': get_env_float('MIN_CONFIDENCE', 0.75),
             
             # Additional risk controls
             'MIN_BALANCE_THRESHOLD': get_env_float('MIN_BALANCE_THRESHOLD', 10.0),
-            'BALANCE_DROP_ALERT_PERCENT': get_env_float('BALANCE_DROP_ALERT_PERCENT', 5.0),
+            'BALANCE_DROP_ALERT_PERCENT': get_env_float('BALANCE_DROP_ALERT_PERCENT', 10.0),
         }
 
         # Add RUN_NAME property
