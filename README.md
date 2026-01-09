@@ -1,3 +1,7 @@
+## Heads up: The project is currently unstable/broken and on hiatus.
+
+## I'm not planning to work on it in the foreseeable future—proceed with caution!
+
 Use at Your Own Risk
 This is experimental/beta software. It may contain bugs or cause unexpected behavior.
 No warranties are provided. Use entirely at your own discretion and risk.  
