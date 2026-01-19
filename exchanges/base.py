@@ -4,12 +4,13 @@ from typing import Any, Optional, List, Dict
 
 
 class Position:
-    def __init__(self, positionId: str, side: str, size: float, entry_price: float, symbol: str):
+    def __init__(self, positionId: str, side: str, size: float, entry_price: float, symbol: str, timestamp: int):
         self.positionId = positionId
         self.side = side  # "BUY" or "SELL"
         self.size = size
         self.entry_price = entry_price
         self.symbol = symbol
+        self.timestamp = timestamp
         self.pnl: float = 0.0  # Profit/Loss in USD
         self.pnl_percent: float = 0.0  # Profit/Loss percentage
 
@@ -37,9 +38,15 @@ class BaseExchange(ABC):
     def set_margin_mode(self, symbol: str, mode: str): ...
 
     @abstractmethod
-    def open_position(self, symbol: str, side: str,
-                      size: str, sl_pct: Optional[int]): ...
+    def open_position(self, symbol: str, side: str, size: str) -> Dict: ...
 
+    @abstractmethod
+    def get_order_status(self, symbol: str, order_id: str) -> Optional[Dict[str, Any]]: ...
+
+    @abstractmethod
+    def cancel_order(self, symbol: str, order_id: str) -> bool: ...
+    @abstractmethod
+    def close_position(self, position, reason: str = "manual") -> Dict: ...
     @abstractmethod
     def flash_close_position(self, symbol: str): ...
     @abstractmethod
