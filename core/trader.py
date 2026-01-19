@@ -1,18 +1,14 @@
 # core/trader.py
-import random
 import logging
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime
 import pandas as pd
 import pandas_ta as ta
 from typing import Dict, Any, Optional
 from exchanges.base import BaseExchange
 from ai.prompt_builder import build_prompt
 from ai.provider import send_request, save_response, AIOutlook
-from utils.logger import configure_logger
 from utils.risk_manager import RiskManager
-from tenacity import retry, stop_after_attempt, wait_fixed
-import traceback
 
 
 class TradingBot:
@@ -193,8 +189,7 @@ class TradingBot:
                     else:
                         self.logger.warning("AI requested CLOSE_POSITION but no position is open")
 
-            self.logger.info(
-                f"Cycle completed. AI Decision: {ai_action_display}")
+            self.logger.info(f"Cycle completed. AI Decision: {ai_action_display}")
 
         except Exception as e:
             self.logger.error(f"Error in run_cycle: {e}")
