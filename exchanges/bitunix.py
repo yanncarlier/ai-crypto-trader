@@ -221,7 +221,7 @@ class BitunixFutures(BaseExchange):
             "total_positions": len(positions),
             "total_exposure": 0.0,
             "unrealized_pnl": 0.0,
-            "leverage": getattr(self.config, 'LEVERAGE', 1)
+            "leverage": self.config.get('LEVERAGE', 1)
         }
         
         if positions:

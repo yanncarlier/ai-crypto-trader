@@ -261,11 +261,14 @@ class TradingBot:
                 else:
                     # Same direction - already in position, prevent duplicate
                     self.logger.warning(f"AI requested {side} but already in {existing_position.side} position - blocking duplicate")
+                    # Normalize timestamp from exchange (ms vs s)
+                    ts = existing_position.timestamp
+                    ts_dt = datetime.fromtimestamp(ts / 1000) if ts >= 1e10 else datetime.fromtimestamp(ts)
                     self.current_position = {
                         'side': existing_position.side,
                         'quantity': existing_position.size,
                         'entry_price': existing_position.entry_price,
-                        'timestamp': datetime.fromtimestamp(existing_position.timestamp / 1000) if position.timestamp >= 1e10 else datetime.fromtimestamp(existing_position.timestamp)
+                        'timestamp': ts_dt
                     }
                     return
 
@@ -292,6 +295,10 @@ class TradingBot:
         try:
             app_logger = self.app_logger
             app_logger.info(f"Attempting atomic position open: {side} {quantity:.4f} {symbol}")
+            # Sanity check on inputs
+            if quantity <= 0:
+                self.logger.error("Quantity must be positive in atomic execution")
+                return
             
             # Create a temporary lock-like mechanism for this atomic operation
             # This ensures no concurrent operations corrupt our state
@@ -385,11 +392,14 @@ class TradingBot:
                     return
 
             # Create temporary position state for SL/TP setup
+            # Normalize verified position timestamp
+            vts = verified_position.timestamp
+            vts_dt = datetime.fromtimestamp(vts / 1000) if vts >= 1e10 else datetime.fromtimestamp(vts)
             temp_position = {
                 'side': side,
                 'quantity': quantity,
                 'entry_price': verified_position.entry_price,
-                'timestamp': datetime.fromtimestamp(verified_position.timestamp / 1000) if verified_position.timestamp >= 1e10 else datetime.fromtimestamp(verified_position.timestamp),
+                'timestamp': vts_dt,
                 'position_id': verified_position.positionId
             }
 
@@ -754,11 +764,13 @@ class TradingBot:
             
             if actual_position:
                 # Update local state to match exchange reality
+                ats = actual_position.timestamp
+                ats_dt = datetime.fromtimestamp(ats / 1000) if ats >= 1e10 else datetime.fromtimestamp(ats)
                 updated_state = {
                     'side': actual_position.side,
                     'quantity': actual_position.size,
                     'entry_price': actual_position.entry_price,
-                    'timestamp': datetime.fromtimestamp(actual_position.timestamp / 1000) if actual_position.timestamp >= 1e10 else datetime.fromtimestamp(actual_position.timestamp),
+                    'timestamp': ats_dt,
                     'position_id': actual_position.positionId
                 }
                 
