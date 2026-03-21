@@ -4,9 +4,7 @@
 
 ## Contributions and feedback are welcome and greatly appreciated!! if I have time I will work on it.
 
-Use at Your Own Risk
-This is experimental/beta software. It may contain bugs or cause unexpected behavior.
-No warranties are provided. Use entirely at your own discretion and risk.  
+**Disclaimer: Use at Your Own Risk** This is experimental beta software and may contain bugs or exhibit unexpected behavior. It is provided "as-is" without any warranties. Use of this software is entirely at your own discretion and risk.
 
 Bitunix API Documentation  
 https://openapidoc.bitunix.com/doc/common/introduction.html  
